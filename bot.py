@@ -10,10 +10,7 @@ from discord.ext import commands
 # =========================================================
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-
-# Railway Volume kullanacaksan /data doğru yer.
 DB_PATH = os.getenv("DB_PATH", "/data/ulke_rp.db")
-
 PREFIX = "."
 
 if not TOKEN:
@@ -41,7 +38,11 @@ bot = commands.Bot(
 # VERİTABANI
 # =========================================================
 
-db = sqlite3.connect(DB_PATH, check_same_thread=False)
+db = sqlite3.connect(
+    DB_PATH,
+    check_same_thread=False
+)
+
 db.row_factory = sqlite3.Row
 
 db.executescript("""
@@ -140,7 +141,7 @@ def ensure_user(guild_id, user_id, name):
 
 
 # =========================================================
-# YETKİ
+# ROLLER
 # =========================================================
 
 STAFF_ROLES = {
@@ -157,44 +158,53 @@ RP_ROLES = {
     "🏛️ Başbakan": discord.Colour.red(),
     "🏢 Bakan": discord.Colour.blue(),
     "🗳️ Milletvekili": discord.Colour.purple(),
-
-    # ÖNCEKİ HATAN BURADAYDI:
-    # discord.Colour.grey() YOK.
-    # Doğrusu dark_grey().
     "⚖️ Yargı": discord.Colour.dark_grey(),
 
-    "👮 Polis": discord.Colour.dark_blue(),
+    "👮 Emniyet Müdürü": discord.Colour.dark_blue(),
+    "👮 Polis": discord.Colour.blue(),
+    "🪖 Asker": discord.Colour.dark_green(),
+    "🚑 Sağlık Görevlisi": discord.Colour.red(),
+
     "📰 Gazeteci": discord.Colour.yellow(),
+    "📺 Haberci": discord.Colour.orange(),
+
     "🏢 Şirket Sahibi": discord.Colour.green(),
     "💼 Çalışan": discord.Colour.teal(),
+    "🏦 Bankacı": discord.Colour.dark_gold(),
+
     "👤 Vatandaş": discord.Colour.light_grey(),
     "🌱 Yeni Vatandaş": discord.Colour.dark_grey(),
 }
 
 ALL_ROLE_NAMES = set(STAFF_ROLES) | set(RP_ROLES)
 
+STAFF_NAMES = set(STAFF_ROLES.keys())
+
+MANAGEMENT_NAMES = {
+    "👑 Kurucu",
+    "🛡️ Baş Yönetici",
+    "🔧 Yönetici"
+}
+
+
+def has_role(member, role_names):
+    return any(
+        role.name in role_names
+        for role in member.roles
+    )
+
 
 def is_staff(member):
     return (
         member.guild_permissions.administrator
-        or any(
-            role.name in STAFF_ROLES
-            for role in member.roles
-        )
+        or has_role(member, STAFF_NAMES)
     )
 
 
 def is_management(member):
     return (
         member.guild_permissions.administrator
-        or any(
-            role.name in {
-                "👑 Kurucu",
-                "🛡️ Baş Yönetici",
-                "🔧 Yönetici"
-            }
-            for role in member.roles
-        )
+        or has_role(member, MANAGEMENT_NAMES)
     )
 
 
@@ -208,6 +218,7 @@ CATEGORIES = {
         "📢・duyurular",
         "🌍・ülke-bilgileri",
         "🪪・vatandaş-kayıt",
+        "📋・yardım",
     ],
 
     "🏛️ DEVLET": [
@@ -215,6 +226,7 @@ CATEGORIES = {
         "🏛️・meclis",
         "📜・kanunlar",
         "🗳️・seçimler",
+        "📋・devlet-kararları",
     ],
 
     "💰 EKONOMİ": [
@@ -223,27 +235,69 @@ CATEGORIES = {
         "🏢・şirketler",
         "💼・iş-ilanları",
         "🛒・pazar",
+        "📈・borsa",
     ],
 
     "👥 HALK": [
         "💬・şehir-sohbeti",
         "🏙️・şehirler",
         "🏠・evler",
+        "🎉・etkinlikler",
     ],
 
     "📰 MEDYA": [
         "📰・son-dakika",
         "🗞️・gazeteler",
+        "📺・televizyon",
+        "🎙️・basın",
     ],
 
     "🌎 DIŞ İLİŞKİLER": [
         "🌎・diplomasi",
+        "🤝・antlaşmalar",
+        "✈️・yurtdışı",
+    ],
+
+    "⚖️ HUKUK": [
+        "⚖️・mahkeme",
+        "📜・hukuk",
+        "📋・dava-kayıtları",
+    ],
+
+    "👮 GÜVENLİK": [
+        "👮・polis",
+        "🚨・acil-durum",
+        "🪖・ordu",
+    ],
+
+    "🏥 SAĞLIK": [
+        "🏥・hastane",
+        "🚑・ambulans",
+    ],
+
+    "🏢 ŞİRKETLER": [
+        "🏢・şirketler",
+        "💼・işe-alım",
+        "📊・şirket-duyuruları",
+    ],
+
+    "🎭 RP": [
+        "🎭・rp-sohbet",
+        "📍・şehir-rp",
+        "🚗・ulaşım-rp",
+        "🏙️・sosyal-hayat",
+    ],
+
+    "🎫 DESTEK": [
+        "🎫・destek",
+        "📝・başvurular",
+        "⚠️・şikayetler",
     ],
 
     "⚙️ YÖNETİM": [
         "🔐・yetkili-komutları",
-        "📋・başvurular",
-        "📝・şikayetler",
+        "📋・yönetim-log",
+        "🛠️・bot-log",
     ],
 }
 
@@ -251,8 +305,18 @@ READ_ONLY_CHANNELS = {
     "📜・kurallar",
     "📢・duyurular",
     "🌍・ülke-bilgileri",
+    "📋・yardım",
+    "📜・kanunlar",
     "📰・son-dakika",
+    "📋・devlet-kararları",
+    "📋・yönetim-log",
+    "🛠️・bot-log",
+}
+
+STAFF_ONLY_CHANNELS = {
     "🔐・yetkili-komutları",
+    "📋・yönetim-log",
+    "🛠️・bot-log",
 }
 
 
@@ -262,6 +326,7 @@ READ_ONLY_CHANNELS = {
 
 @bot.event
 async def on_ready():
+
     print("====================================")
     print(f"BOT AKTİF: {bot.user}")
     print(f"SUNUCULAR: {len(bot.guilds)}")
@@ -351,12 +416,16 @@ async def yardım(ctx):
 # =========================================================
 
 @bot.command()
-@commands.cooldown(1, 30, commands.BucketType.guild)
+@commands.cooldown(
+    1,
+    60,
+    commands.BucketType.guild
+)
 async def kur(ctx):
 
     if not is_management(ctx.author):
         return await ctx.send(
-            "❌ Bu komutu sadece yönetim kullanabilir."
+            "❌ Bu komutu sadece **Kurucu / Baş Yönetici / Yönetici** kullanabilir."
         )
 
     me = ctx.guild.me
@@ -371,106 +440,142 @@ async def kur(ctx):
             "❌ Botta **Rolleri Yönet** izni yok."
         )
 
-    msg = await ctx.send(
-        "🏗️ **ÜLKE RP KURULUYOR...**\n"
-        "Mevcut RP şablonu temizleniyor."
+    warning = await ctx.send(
+        "⚠️ **DİKKAT! SUNUCU SIFIRLANACAK!**\n\n"
+        "Bu işlem:\n"
+        "🗑️ Tüm kanalları\n"
+        "🗑️ Tüm kategorileri\n"
+        "🗑️ Botun silebildiği rolleri\n\n"
+        "silecek ve ülke RP sistemini baştan oluşturacak.\n\n"
+        "**Devam etmek için 15 saniye içinde `onayla` yaz.**"
     )
 
-    # -----------------------------------------------------
-    # ESKİ RP KATEGORİLERİNİ SİL
-    # -----------------------------------------------------
-
-    for category_name in CATEGORIES:
-
-        category = discord.utils.get(
-            ctx.guild.categories,
-            name=category_name
+    def check(message):
+        return (
+            message.author.id == ctx.author.id
+            and message.channel.id == ctx.channel.id
+            and message.content.lower().strip() == "onayla"
         )
 
-        if category:
-
-            try:
-                await category.delete(
-                    reason="Ülke RP yeniden kurulumu"
-                )
-            except discord.HTTPException as e:
-                print(
-                    f"Kategori silinemedi: "
-                    f"{category_name} -> {e}"
-                )
-
-    # -----------------------------------------------------
-    # KATEGORİ DIŞINDAKİ ESKİ RP KANALLARINI SİL
-    # -----------------------------------------------------
-
-    all_channel_names = set()
-
-    for channels in CATEGORIES.values():
-        all_channel_names.update(channels)
-
-    for channel in list(ctx.guild.text_channels):
-
-        if channel.name in all_channel_names:
-
-            try:
-                await channel.delete(
-                    reason="Ülke RP yeniden kurulumu"
-                )
-            except discord.HTTPException:
-                pass
-
-    # -----------------------------------------------------
-    # ESKİ RP ROLLERİNİ SİL
-    # -----------------------------------------------------
-
-    for role_name in ALL_ROLE_NAMES:
-
-        role = discord.utils.get(
-            ctx.guild.roles,
-            name=role_name
+    try:
+        await bot.wait_for(
+            "message",
+            timeout=15,
+            check=check
         )
 
-        if not role:
+    except asyncio.TimeoutError:
+        return await ctx.send(
+            "❌ Süre doldu. Kurulum iptal edildi."
+        )
+
+    msg = await ctx.send(
+        "🧨 **SUNUCU SIFIRLANIYOR...**\n"
+        "Lütfen işlem bitene kadar komut kullanma."
+    )
+
+    # =====================================================
+    # TÜM KANALLARI SİL
+    # =====================================================
+
+    deleted_channels = 0
+
+    for channel in list(ctx.guild.channels):
+
+        try:
+
+            await channel.delete(
+                reason="Ülke RP tam sunucu sıfırlaması"
+            )
+
+            deleted_channels += 1
+
+        except discord.Forbidden:
+
+            print(
+                f"[KANAL SİLİNEMEDİ] "
+                f"{channel.name}: Yetki yok."
+            )
+
+        except discord.HTTPException as e:
+
+            print(
+                f"[KANAL SİLİNEMEDİ] "
+                f"{channel.name}: {e}"
+            )
+
+    # =====================================================
+    # ROLLERİ SİL
+    # =====================================================
+
+    await msg.edit(
+        content=(
+            "🧨 **SUNUCU SIFIRLANIYOR...**\n\n"
+            f"🗑️ Silinen kanallar: `{deleted_channels}`\n"
+            "🎭 Eski roller temizleniyor..."
+        )
+    )
+
+    deleted_roles = 0
+
+    for role in list(ctx.guild.roles):
+
+        if role.is_default():
             continue
 
+        # Discord, botun üstündeki rolleri sildirmez.
         if role >= me.top_role:
             print(
-                f"Rol botun üstünde olduğu için silinemedi: "
-                f"{role_name}"
+                f"[ROL SİLİNEMEDİ] {role.name}: "
+                "Bot rolünün üstünde."
             )
             continue
 
         try:
+
             await role.delete(
-                reason="Ülke RP yeniden kurulumu"
+                reason="Ülke RP tam sunucu sıfırlaması"
             )
-        except discord.HTTPException as e:
+
+            deleted_roles += 1
+
+        except discord.Forbidden:
+
             print(
-                f"Rol silinemedi: "
-                f"{role_name} -> {e}"
+                f"[ROL SİLİNEMEDİ] {role.name}: Yetki yok."
             )
+
+        except discord.HTTPException as e:
+
+            print(
+                f"[ROL SİLİNEMEDİ] {role.name}: {e}"
+            )
+
+    # =====================================================
+    # ROLLERİ OLUŞTUR
+    # =====================================================
 
     await msg.edit(
-        content="🎭 Roller oluşturuluyor..."
+        content="🎭 **YENİ ROL SİSTEMİ OLUŞTURULUYOR...**"
     )
-
-    # -----------------------------------------------------
-    # ROLLERİ OLUŞTUR
-    # -----------------------------------------------------
 
     roles = {}
 
-    for name, colour in {
+    all_roles = {
         **STAFF_ROLES,
         **RP_ROLES
-    }.items():
+    }
+
+    for name, colour in all_roles.items():
 
         try:
 
             role = await ctx.guild.create_role(
                 name=name,
                 colour=colour,
-                reason="Ülke RP kurulumu"
+                mentionable=False,
+                hoist=True,
+                reason="Ülke RP rol sistemi"
             )
 
             roles[name] = role
@@ -478,104 +583,225 @@ async def kur(ctx):
         except discord.HTTPException as e:
 
             print(
-                f"Rol oluşturulamadı: "
-                f"{name} -> {e}"
+                f"[ROL OLUŞTURULAMADI] "
+                f"{name}: {e}"
             )
 
-    await msg.edit(
-        content="📁 Kategoriler ve kanallar oluşturuluyor..."
-    )
+    # =====================================================
+    # YETKİLİ ROL İZİNLERİ
+    # =====================================================
 
-    # -----------------------------------------------------
-    # KATEGORİ + KANAL
-    # -----------------------------------------------------
+    permission_map = {
 
-    for category_name, channels in CATEGORIES.items():
+        "👑 Kurucu": discord.Permissions(
+            administrator=True
+        ),
+
+        "🛡️ Baş Yönetici": discord.Permissions(
+            manage_guild=True,
+            manage_channels=True,
+            manage_roles=True,
+            manage_messages=True,
+            kick_members=True,
+            ban_members=True,
+            moderate_members=True,
+            view_audit_log=True,
+            manage_nicknames=True
+        ),
+
+        "🔧 Yönetici": discord.Permissions(
+            manage_channels=True,
+            manage_roles=True,
+            manage_messages=True,
+            kick_members=True,
+            moderate_members=True,
+            view_audit_log=True
+        ),
+
+        "🔨 Baş Moderatör": discord.Permissions(
+            manage_messages=True,
+            moderate_members=True,
+            kick_members=True,
+            view_audit_log=True
+        ),
+
+        "🛡️ Moderatör": discord.Permissions(
+            manage_messages=True,
+            moderate_members=True,
+            view_audit_log=True
+        ),
+    }
+
+    for role_name, permissions in permission_map.items():
+
+        role = roles.get(role_name)
+
+        if not role:
+            continue
 
         try:
 
-            category = await ctx.guild.create_category(
-                category_name,
-                reason="Ülke RP kurulumu"
+            await role.edit(
+                permissions=permissions,
+                reason="Ülke RP yetki sistemi"
             )
 
         except discord.HTTPException as e:
 
             print(
-                f"Kategori oluşturulamadı: "
-                f"{category_name} -> {e}"
+                f"[ROL İZNİ AYARLANAMADI] "
+                f"{role_name}: {e}"
             )
+
+    # =====================================================
+    # KATEGORİLER
+    # =====================================================
+
+    await msg.edit(
+        content="📁 **KATEGORİLER OLUŞTURULUYOR...**"
+    )
+
+    created_categories = {}
+
+    for category_name in CATEGORIES:
+
+        try:
+
+            category = await ctx.guild.create_category(
+                category_name,
+                reason="Ülke RP kategori sistemi"
+            )
+
+            created_categories[category_name] = category
+
+        except discord.HTTPException as e:
+
+            print(
+                f"[KATEGORİ OLUŞTURULAMADI] "
+                f"{category_name}: {e}"
+            )
+
+    # =====================================================
+    # KANALLAR
+    # =====================================================
+
+    await msg.edit(
+        content="💬 **KANALLAR OLUŞTURULUYOR...**"
+    )
+
+    created_channels = 0
+
+    for category_name, channel_names in CATEGORIES.items():
+
+        category = created_categories.get(
+            category_name
+        )
+
+        if not category:
             continue
 
-        for channel_name in channels:
+        for channel_name in channel_names:
 
             try:
 
                 channel = await ctx.guild.create_text_channel(
                     channel_name,
                     category=category,
-                    reason="Ülke RP kurulumu"
+                    reason="Ülke RP kanal sistemi"
                 )
+
+                created_channels += 1
 
             except discord.HTTPException as e:
 
                 print(
-                    f"Kanal oluşturulamadı: "
-                    f"{channel_name} -> {e}"
+                    f"[KANAL OLUŞTURULAMADI] "
+                    f"{channel_name}: {e}"
                 )
+
                 continue
 
-            # HERKESİN İZNİ
-            everyone = discord.PermissionOverwrite()
+            # =================================================
+            # @EVERYONE
+            # =================================================
 
-            everyone.view_channel = True
-            everyone.read_message_history = True
+            everyone_permissions = discord.PermissionOverwrite(
+                view_channel=True,
+                read_message_history=True
+            )
 
-            if channel_name in READ_ONLY_CHANNELS:
-                everyone.send_messages = False
+            if channel_name in STAFF_ONLY_CHANNELS:
+
+                everyone_permissions.view_channel = False
+                everyone_permissions.send_messages = False
+
+            elif channel_name in READ_ONLY_CHANNELS:
+
+                everyone_permissions.send_messages = False
+
             else:
-                everyone.send_messages = True
+
+                everyone_permissions.send_messages = True
 
             try:
 
                 await channel.set_permissions(
                     ctx.guild.default_role,
-                    overwrite=everyone,
-                    reason="RP kanal izinleri"
+                    overwrite=everyone_permissions,
+                    reason="Ülke RP kanal izinleri"
                 )
 
-            except discord.HTTPException:
-                pass
+            except discord.HTTPException as e:
 
-            # YETKİLİLER
-            for staff_name in STAFF_ROLES:
+                print(
+                    f"[KANAL İZNİ] "
+                    f"{channel_name}: {e}"
+                )
+
+            # =================================================
+            # STAFF
+            # =================================================
+
+            for staff_name in STAFF_NAMES:
 
                 role = roles.get(staff_name)
 
                 if not role:
                     continue
 
-                overwrite = discord.PermissionOverwrite()
+                staff_permissions = discord.PermissionOverwrite(
+                    view_channel=True,
+                    read_message_history=True,
+                    send_messages=True
+                )
 
-                overwrite.view_channel = True
-                overwrite.read_message_history = True
-                overwrite.send_messages = True
-                overwrite.manage_messages = True
+                if staff_name in {
+                    "👑 Kurucu",
+                    "🛡️ Baş Yönetici",
+                    "🔧 Yönetici"
+                }:
+                    staff_permissions.manage_messages = True
+
+                elif staff_name in {
+                    "🔨 Baş Moderatör",
+                    "🛡️ Moderatör"
+                }:
+                    staff_permissions.manage_messages = True
 
                 try:
 
                     await channel.set_permissions(
                         role,
-                        overwrite=overwrite,
-                        reason="Yetkili kanal izinleri"
+                        overwrite=staff_permissions,
+                        reason="Ülke RP yetkili izinleri"
                     )
 
                 except discord.HTTPException:
                     pass
 
-    # -----------------------------------------------------
-    # ÜLKE
-    # -----------------------------------------------------
+    # =====================================================
+    # ÜLKE VERİTABANI
+    # =====================================================
 
     country = db.execute(
         """
@@ -611,11 +837,26 @@ async def kur(ctx):
             )
         )
 
-        db.commit()
+    else:
 
-    # -----------------------------------------------------
-    # KURALLAR
-    # -----------------------------------------------------
+        db.execute(
+            """
+            UPDATE countries
+            SET treasury=100000,
+                president_id=?
+            WHERE guild_id=?
+            """,
+            (
+                ctx.author.id,
+                ctx.guild.id
+            )
+        )
+
+    db.commit()
+
+    # =====================================================
+    # KURALLAR MESAJI
+    # =====================================================
 
     rules = discord.utils.get(
         ctx.guild.text_channels,
@@ -634,7 +875,7 @@ async def kur(ctx):
                 "**5.** Power Gaming yapma.\n"
                 "**6.** Başka oyuncunun karakterini zorla yönetme.\n"
                 "**7.** Yetkili kararlarına uy.\n"
-                "**8.** Bug veya açıkları kötüye kullanma.\n"
+                "**8.** Bugları kötüye kullanma.\n"
                 "**9.** RP ile gerçek hayatı ayır.\n"
                 "**10.** Kişisel bilgilerini paylaşma."
             ),
@@ -643,9 +884,9 @@ async def kur(ctx):
 
         await rules.send(embed=embed)
 
-    # -----------------------------------------------------
-    # ÜLKE BİLGİ
-    # -----------------------------------------------------
+    # =====================================================
+    # ÜLKE BİLGİLERİ
+    # =====================================================
 
     info = discord.utils.get(
         ctx.guild.text_channels,
@@ -655,31 +896,68 @@ async def kur(ctx):
     if info:
 
         embed = discord.Embed(
-            title="🌍 ÜLKE RP",
+            title="🌍 ÜLKE RP SİSTEMİ",
             description=(
-                "Ülke RP sistemine hoş geldiniz!\n\n"
+                "Ülke RP sunucusuna hoş geldiniz!\n\n"
                 "🪪 `.kayıt İsim`\n"
-                "💼 `.işler`\n"
+                "👤 `.profil`\n"
                 "💰 `.para`\n"
+                "💼 `.işler`\n"
                 "🏢 `.şirketkur isim`\n"
-                "🗳️ `.adayol`\n\n"
-                "📌 Komutlar: `.yardım`"
+                "🗳️ `.adayol`\n"
+                "🌍 `.ülke`\n\n"
+                "📚 Tüm komutlar için `.yardım`"
             ),
             colour=discord.Colour.green()
         )
 
         await info.send(embed=embed)
 
+    # =====================================================
+    # DUYURU
+    # =====================================================
+
+    announcements = discord.utils.get(
+        ctx.guild.text_channels,
+        name="📢・duyurular"
+    )
+
+    if announcements:
+
+        embed = discord.Embed(
+            title="📢 SİSTEM KURULDU",
+            description=(
+                "🌍 Ülke RP sistemi başarıyla kuruldu.\n\n"
+                "Vatandaş olmak için `.kayıt İsim` yaz."
+            ),
+            colour=discord.Colour.green()
+        )
+
+        await announcements.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # BİTİŞ
+    # =====================================================
+
     await msg.edit(
         content=(
-            "✅ **ÜLKE RP KURULUMU TAMAMLANDI!**\n\n"
-            "🎭 Roller oluşturuldu.\n"
-            "📁 Kanallar oluşturuldu.\n"
-            "🔐 Kanal izinleri ayarlandı.\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🌍 **ÜLKE RP KURULUMU TAMAMLANDI!**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🗑️ Silinen kanallar: `{deleted_channels}`\n"
+            f"🗑️ Silinen roller: `{deleted_roles}`\n"
+            f"🎭 Yeni roller: `{len(roles)}`\n"
+            f"📁 Kategoriler: `{len(created_categories)}`\n"
+            f"💬 Kanallar: `{created_channels}`\n\n"
+            "🔐 Yetki sistemi hazır.\n"
+            "👥 Vatandaş sistemi hazır.\n"
             "💰 Ekonomi sistemi hazır.\n"
+            "🏢 Şirket sistemi hazır.\n"
             "🗳️ Seçim sistemi hazır.\n"
             "🌍 Ülke sistemi hazır.\n\n"
-            "Başlamak için `.yardım` yaz."
+            "📚 Komutlar: `.yardım`"
         )
     )
 
@@ -715,18 +993,18 @@ async def kayıt(ctx, *, isim=None):
         isim
     )
 
-    role = discord.utils.get(
+    new_role = discord.utils.get(
         ctx.guild.roles,
         name="🌱 Yeni Vatandaş"
     )
 
-    if role and role < ctx.guild.me.top_role:
+    if new_role:
 
         try:
 
             await ctx.author.add_roles(
-                role,
-                reason="Vatandaş kaydı"
+                new_role,
+                reason="Yeni vatandaş kaydı"
             )
 
         except discord.HTTPException:
@@ -834,7 +1112,7 @@ async def para(ctx):
 
 
 # =========================================================
-# PARA GÖNDER
+# ÖDE
 # =========================================================
 
 @bot.command()
@@ -919,6 +1197,8 @@ JOBS = {
     "mühendis": ("Mühendis", 1000),
     "gazeteci": ("Gazeteci", 650),
     "işçi": ("İşçi", 500),
+    "bankacı": ("Bankacı", 850),
+    "asker": ("Asker", 800),
 }
 
 
@@ -938,9 +1218,16 @@ async def işler(ctx):
 @bot.command()
 async def iş(ctx, meslek=None):
 
-    if not meslek or meslek.lower() not in JOBS:
+    if not meslek:
         return await ctx.send(
             "❌ `.işler` yazarak meslekleri gör."
+        )
+
+    meslek = meslek.lower()
+
+    if meslek not in JOBS:
+        return await ctx.send(
+            "❌ Böyle bir meslek yok."
         )
 
     user = get_user(
@@ -953,7 +1240,7 @@ async def iş(ctx, meslek=None):
             "❌ Önce kayıt ol."
         )
 
-    job_name, _ = JOBS[meslek.lower()]
+    job_name, _ = JOBS[meslek]
 
     db.execute(
         """
@@ -976,7 +1263,11 @@ async def iş(ctx, meslek=None):
 
 
 @bot.command()
-@commands.cooldown(1, 30, commands.BucketType.user)
+@commands.cooldown(
+    1,
+    30,
+    commands.BucketType.user
+)
 async def çalış(ctx):
 
     user = get_user(
@@ -1406,9 +1697,20 @@ async def ülke(ctx):
             "❌ Henüz ülke oluşturulmamış."
         )
 
+    president = ctx.guild.get_member(
+        country["president_id"]
+    )
+
+    president_text = (
+        president.mention
+        if president
+        else "Belirlenmemiş"
+    )
+
     await ctx.send(
         f"🌍 **{country['name']}**\n"
         f"🏛️ Başkent: **{country['capital']}**\n"
+        f"👑 Başkan: {president_text}\n"
         f"💰 Hazine: **₺{country['treasury']:,}**"
     )
 
@@ -1754,7 +2056,7 @@ async def söyle(ctx, *, mesaj=None):
 
     if not is_staff(ctx.author):
         return await ctx.send(
-            "❌ Yetkin yok."
+            "❌ Bu komutu sadece yetkililer kullanabilir."
         )
 
     if not mesaj:
@@ -1779,7 +2081,7 @@ async def duyuru(ctx, *, mesaj=None):
 
     if not is_staff(ctx.author):
         return await ctx.send(
-            "❌ Yetkin yok."
+            "❌ Bu komutu sadece yetkililer kullanabilir."
         )
 
     if not mesaj:
@@ -1794,13 +2096,14 @@ async def duyuru(ctx, *, mesaj=None):
 
     if not channel:
         return await ctx.send(
-            "❌ Duyuru kanalı bulunamadı. `.kur` kullan."
+            "❌ Duyuru kanalı bulunamadı."
         )
 
     embed = discord.Embed(
         title="📢 DUYURU",
         description=mesaj,
-        colour=discord.Colour.blue()
+        colour=discord.Colour.blue(),
+        timestamp=datetime.now(timezone.utc)
     )
 
     embed.set_footer(
@@ -1821,7 +2124,10 @@ async def duyuru(ctx, *, mesaj=None):
 # =========================================================
 
 @bot.command()
-async def temizle(ctx, miktar: int = 10):
+async def temizle(
+    ctx,
+    miktar: int = 10
+):
 
     if not is_staff(ctx.author):
         return await ctx.send(
@@ -1890,7 +2196,9 @@ async def embed(ctx, *, veri=None):
     except discord.HTTPException:
         pass
 
-    await ctx.send(embed=e)
+    await ctx.send(
+        embed=e
+    )
 
 
 # =========================================================
@@ -1934,7 +2242,9 @@ async def bilgi(ctx):
         inline=True
     )
 
-    await ctx.send(embed=embed)
+    await ctx.send(
+        embed=embed
+    )
 
 
 # =========================================================
@@ -1961,18 +2271,18 @@ async def on_command_error(ctx, error):
 
     if isinstance(
         error,
-        commands.MissingPermissions
-    ):
-        return await ctx.send(
-            "❌ Bu işlem için Discord yetkin yok."
-        )
-
-    if isinstance(
-        error,
         commands.BadArgument
     ):
         return await ctx.send(
             "❌ Kullanıcı veya sayı hatalı."
+        )
+
+    if isinstance(
+        error,
+        commands.MissingPermissions
+    ):
+        return await ctx.send(
+            "❌ Bu işlem için Discord yetkin yok."
         )
 
     print(
