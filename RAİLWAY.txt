@@ -1,0 +1,183 @@
+========================================
+ÜLKE RP BOT - RAILWAY AYARLARI
+========================================
+
+GITHUB REPOSU:
+
+bot.py
+requirements.txt
+RAILWAY.txt
+
+
+----------------------------------------
+RAILWAY VARIABLES
+----------------------------------------
+
+Railway > Variables:
+
+DISCORD_TOKEN
+=
+BURAYA_DISCORD_BOT_TOKENİNİ_YAZ
+
+DB_PATH
+=
+/data/ulke_rp.db
+
+
+----------------------------------------
+RAILWAY VOLUME
+----------------------------------------
+
+Railway > Service > Volumes
+
+Yeni Volume oluştur.
+
+Mount Path:
+
+/data
+
+Böylece SQLite veritabanı Railway restart/deploy
+sonrasında korunur.
+
+
+----------------------------------------
+START COMMAND
+----------------------------------------
+
+Settings > Deploy > Start Command:
+
+python bot.py
+
+
+----------------------------------------
+DISCORD DEVELOPER PORTAL
+----------------------------------------
+
+Bot > Privileged Gateway Intents:
+
+Message Content Intent = ON
+
+Server Members Intent = ON
+
+
+----------------------------------------
+BOT İZİNLERİ
+----------------------------------------
+
+Botta en az:
+
+View Channels
+Send Messages
+Read Message History
+Embed Links
+Manage Messages
+Manage Channels
+Manage Roles
+
+
+olmalı.
+
+
+----------------------------------------
+ÇOK ÖNEMLİ
+----------------------------------------
+
+Discord sunucunda botun rolünü,
+oluşturacağı RP rollerinin ÜSTÜNE taşı.
+
+Örneğin:
+
+BOT
+↓
+👑 Kurucu
+🛡️ Baş Yönetici
+🔧 Yönetici
+🔨 Baş Moderatör
+🛡️ Moderatör
+👑 Devlet Başkanı
+...
+👤 Vatandaş
+
+
+----------------------------------------
+İLK KOMUT
+----------------------------------------
+
+Sunucuya gir:
+
+.kur
+
+Bu komut:
+
+- RP rollerini oluşturur
+- Eski RP rollerini temizler
+- RP kategorilerini oluşturur
+- RP kanallarını oluşturur
+- Kanal izinlerini ayarlar
+- Yetkililere özel kanal izinleri verir
+- Kurallar mesajını oluşturur
+- Ülke verisini oluşturur
+
+
+----------------------------------------
+TEMEL KOMUTLAR
+----------------------------------------
+
+.yardım
+
+.kayıt Ahmet Yılmaz
+
+.profil
+
+.para
+
+.öde @kişi 500
+
+.işler
+
+.iş doktor
+
+.çalış
+
+.banka yatır 500
+
+.banka çek 500
+
+.şirketkur Anadolu Teknoloji
+
+.şirket
+
+.işeal @kişi
+
+.ev al
+
+.şehir
+
+.ülke
+
+.ülkekur Türkiye
+
+.adayol
+
+.adaylar
+
+.oyver @aday
+
+.seçim durum
+
+
+----------------------------------------
+YETKİLİ KOMUTLARI
+----------------------------------------
+
+.kur
+
+.söyle Merhaba ülke halkı!
+
+.duyuru Sunucu etkinliği başladı!
+
+.temizle 20
+
+.embed Başlık | Mesaj
+
+.bilgi
