@@ -1,10 +1,9 @@
 import os
 import sqlite3
-import asyncio
 from datetime import datetime, timezone
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 # =========================================================
 # AYARLAR
@@ -15,7 +14,9 @@ DB_PATH = os.getenv("DB_PATH", "/data/ulke_rp.db")
 PREFIX = "."
 
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN Railway Variables kısmında yok!")
+    raise RuntimeError(
+        "DISCORD_TOKEN bulunamadı! Railway > Variables bölümüne ekle."
+    )
 
 os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
 
@@ -32,129 +33,67 @@ bot = commands.Bot(
 )
 
 # =========================================================
-# VERİTABANI
+# DATABASE
 # =========================================================
 
-db = sqlite3.connect(
-    DB_PATH,
-    check_same_thread=False
-)
-
+db = sqlite3.connect(DB_PATH, check_same_thread=False)
 db.row_factory = sqlite3.Row
 
 db.executescript("""
-CREATE TABLE IF NOT EXISTS settings (
-    guild_id INTEGER PRIMARY KEY,
-    country_created INTEGER DEFAULT 0
-);
-
 CREATE TABLE IF NOT EXISTS users (
     guild_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    balance INTEGER DEFAULT 1000,
-    bank INTEGER DEFAULT 0,
-    job TEXT DEFAULT 'İşsiz',
-    country TEXT DEFAULT '',
-    factory_count INTEGER DEFAULT 0,
-    last_work INTEGER DEFAULT 0,
+    balance INTEGER NOT NULL DEFAULT 1000,
+    bank INTEGER NOT NULL DEFAULT 0,
+    job TEXT NOT NULL DEFAULT 'İşsiz',
+    city TEXT NOT NULL DEFAULT 'Başkent',
+    country TEXT NOT NULL DEFAULT '',
+    company TEXT NOT NULL DEFAULT '',
+    house TEXT NOT NULL DEFAULT '',
     registered_at TEXT NOT NULL,
     PRIMARY KEY (guild_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS countries (
-    guild_id INTEGER NOT NULL,
+    guild_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
-    owner_id INTEGER DEFAULT 0,
-    president_id INTEGER DEFAULT 0,
-    treasury INTEGER DEFAULT 100000,
-    population INTEGER DEFAULT 0,
-    army INTEGER DEFAULT 0,
-    defense INTEGER DEFAULT 0,
-    last_income INTEGER DEFAULT 0,
-    PRIMARY KEY (guild_id, name)
+    capital TEXT NOT NULL,
+    president_id INTEGER,
+    treasury INTEGER NOT NULL DEFAULT 100000,
+    founded_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS country_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    country TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    status TEXT DEFAULT 'pending'
-);
-
-CREATE TABLE IF NOT EXISTS factories (
+CREATE TABLE IF NOT EXISTS companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
     owner_id INTEGER NOT NULL,
-    country TEXT NOT NULL,
     name TEXT NOT NULL,
-    level INTEGER DEFAULT 1,
-    price INTEGER NOT NULL,
-    hourly_income INTEGER NOT NULL,
-    last_paid INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS inventory (
-    guild_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    item TEXT NOT NULL,
-    amount INTEGER DEFAULT 0,
-    PRIMARY KEY (guild_id, user_id, item)
-);
-
-CREATE TABLE IF NOT EXISTS wars (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    attacker TEXT NOT NULL,
-    defender TEXT NOT NULL,
-    status TEXT DEFAULT 'active',
-    started_at TEXT NOT NULL,
-    ended_at TEXT DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS war_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    war_id INTEGER NOT NULL,
-    message TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS diplomacy (
-    guild_id INTEGER NOT NULL,
-    country1 TEXT NOT NULL,
-    country2 TEXT NOT NULL,
-    status TEXT DEFAULT 'neutral',
-    PRIMARY KEY (guild_id, country1, country2)
+    balance INTEGER NOT NULL DEFAULT 5000,
+    employees INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS elections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
-    country TEXT NOT NULL,
     candidate_id INTEGER NOT NULL,
-    votes INTEGER DEFAULT 0,
-    active INTEGER DEFAULT 1
+    votes INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS votes (
     guild_id INTEGER NOT NULL,
-    election_id INTEGER NOT NULL,
     voter_id INTEGER NOT NULL,
-    PRIMARY KEY (guild_id, election_id, voter_id)
+    election_id INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, voter_id, election_id)
 );
 """)
 
 db.commit()
 
-# =========================================================
-# YARDIMCI
-# =========================================================
 
 def now():
-    return int(datetime.now(timezone.utc).timestamp())
+    return datetime.now(timezone.utc).isoformat()
 
 
 def get_user(guild_id, user_id):
@@ -168,195 +107,32 @@ def get_user(guild_id, user_id):
     ).fetchone()
 
 
-def create_user(guild_id, user_id, name):
-    existing = get_user(guild_id, user_id)
+def ensure_user(guild_id, user_id, name):
+    user = get_user(guild_id, user_id)
 
-    if existing:
-        return existing
-
-    db.execute(
-        """
-        INSERT INTO users
-        (
-            guild_id,
-            user_id,
-            name,
-            registered_at
-        )
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            guild_id,
-            user_id,
-            name,
-            datetime.now(timezone.utc).isoformat()
-        )
-    )
-
-    db.commit()
-
-    return get_user(guild_id, user_id)
-
-
-def get_country(guild_id, country):
-    return db.execute(
-        """
-        SELECT *
-        FROM countries
-        WHERE guild_id=? AND name=?
-        """,
-        (guild_id, country)
-    ).fetchone()
-
-
-def get_owned_country(guild_id, user_id):
-    return db.execute(
-        """
-        SELECT *
-        FROM countries
-        WHERE guild_id=?
-        AND owner_id=?
-        """,
-        (guild_id, user_id)
-    ).fetchone()
-
-
-def is_staff(member):
-    names = {
-        "👑 Kurucu",
-        "🛡️ Baş Yönetici",
-        "🔧 Yönetici",
-        "🔨 Baş Moderatör",
-        "🛡️ Moderatör"
-    }
-
-    return (
-        member.guild_permissions.administrator
-        or any(role.name in names for role in member.roles)
-    )
-
-
-def is_management(member):
-    names = {
-        "👑 Kurucu",
-        "🛡️ Baş Yönetici",
-        "🔧 Yönetici"
-    }
-
-    return (
-        member.guild_permissions.administrator
-        or any(role.name in names for role in member.roles)
-    )
-
-
-def is_country_owner(member):
-    return get_owned_country(
-        member.guild.id,
-        member.id
-    ) is not None
-
-
-def get_item(guild_id, user_id, item):
-    row = db.execute(
-        """
-        SELECT amount
-        FROM inventory
-        WHERE guild_id=?
-        AND user_id=?
-        AND item=?
-        """,
-        (
-            guild_id,
-            user_id,
-            item
-        )
-    ).fetchone()
-
-    return row["amount"] if row else 0
-
-
-def add_item(guild_id, user_id, item, amount):
-    current = get_item(
-        guild_id,
-        user_id,
-        item
-    )
-
-    if current == 0:
+    if user is None:
         db.execute(
             """
-            INSERT INTO inventory
+            INSERT INTO users
             (
                 guild_id,
                 user_id,
-                item,
-                amount
+                name,
+                registered_at
             )
             VALUES (?, ?, ?, ?)
             """,
             (
                 guild_id,
                 user_id,
-                item,
-                amount
+                name,
+                now()
             )
         )
-    else:
-        db.execute(
-            """
-            UPDATE inventory
-            SET amount=amount+?
-            WHERE guild_id=?
-            AND user_id=?
-            AND item=?
-            """,
-            (
-                amount,
-                guild_id,
-                user_id,
-                item
-            )
-        )
+        db.commit()
 
-    db.commit()
+    return get_user(guild_id, user_id)
 
-
-# =========================================================
-# ÜLKELER
-# =========================================================
-
-COUNTRIES = [
-    "Türkiye",
-    "Almanya",
-    "Fransa",
-    "İtalya",
-    "İspanya",
-    "İngiltere",
-    "Portekiz",
-    "Hollanda",
-    "Belçika",
-    "İsviçre",
-    "Avusturya",
-    "Polonya",
-    "Norveç",
-    "İsveç",
-    "Finlandiya",
-    "Danimarka",
-    "Rusya",
-    "Japonya",
-    "Güney Kore",
-    "Çin",
-    "Hindistan",
-    "Brezilya",
-    "Arjantin",
-    "Meksika",
-    "Kanada",
-    "ABD",
-    "Mısır",
-    "Avustralya",
-    "Suudi Arabistan",
-    "Endonezya"
-]
 
 # =========================================================
 # ROLLER
@@ -367,30 +143,53 @@ STAFF_ROLES = {
     "🛡️ Baş Yönetici": discord.Colour.orange(),
     "🔧 Yönetici": discord.Colour.red(),
     "🔨 Baş Moderatör": discord.Colour.purple(),
-    "🛡️ Moderatör": discord.Colour.blue()
+    "🛡️ Moderatör": discord.Colour.blue(),
 }
 
 RP_ROLES = {
-    "🌱 Yeni Vatandaş": discord.Colour.dark_grey(),
-    "👤 Vatandaş": discord.Colour.light_grey(),
-    "🌍 Ülke Başkanı": discord.Colour.gold(),
-    "🏛️ Bakan": discord.Colour.blue(),
+    "👑 Devlet Başkanı": discord.Colour.gold(),
+    "⭐ Başkan Yardımcısı": discord.Colour.orange(),
+    "🏛️ Başbakan": discord.Colour.red(),
+    "🏢 Bakan": discord.Colour.blue(),
     "🗳️ Milletvekili": discord.Colour.purple(),
     "⚖️ Yargı": discord.Colour.dark_grey(),
     "👮 Polis": discord.Colour.dark_blue(),
     "📰 Gazeteci": discord.Colour.yellow(),
-    "🏢 Fabrika Sahibi": discord.Colour.green(),
+    "🏢 Şirket Sahibi": discord.Colour.green(),
     "💼 Çalışan": discord.Colour.teal(),
-    "🎖️ Ordu": discord.Colour.dark_red()
+    "👤 Vatandaş": discord.Colour.light_grey(),
+    "🌱 Yeni Vatandaş": discord.Colour.dark_grey(),
 }
 
-ALL_ROLES = {
-    **STAFF_ROLES,
-    **RP_ROLES
-}
+ALL_ROLE_NAMES = set(STAFF_ROLES) | set(RP_ROLES)
+
+
+def is_staff(member):
+    if member.guild_permissions.administrator:
+        return True
+
+    return any(
+        role.name in STAFF_ROLES
+        for role in member.roles
+    )
+
+
+def is_management(member):
+    if member.guild_permissions.administrator:
+        return True
+
+    return any(
+        role.name in {
+            "👑 Kurucu",
+            "🛡️ Baş Yönetici",
+            "🔧 Yönetici"
+        }
+        for role in member.roles
+    )
+
 
 # =========================================================
-# KANALLAR
+# KANAL ŞABLONU
 # =========================================================
 
 CATEGORIES = {
@@ -398,150 +197,59 @@ CATEGORIES = {
         "📜・kurallar",
         "📢・duyurular",
         "🌍・ülke-bilgileri",
-        "🗺️・harita",
-        "🪪・kayıt"
+        "🪪・vatandaş-kayıt",
     ],
 
     "🏛️ DEVLET": [
-        "🏛️・devlet",
-        "🗳️・seçimler",
+        "👑・devlet",
+        "🏛️・meclis",
         "📜・kanunlar",
-        "🤝・diplomasi"
-    ],
-
-    "🌍 ÜLKELER": [
-        "🌍・ülkeler",
-        "📨・ülke-istekleri",
-        "⚔️・savaşlar",
-        "🕊️・barış"
+        "🗳️・seçimler",
     ],
 
     "💰 EKONOMİ": [
         "💰・ekonomi",
         "🏦・banka",
+        "🏢・şirketler",
+        "💼・iş-ilanları",
         "🛒・market",
-        "🏭・fabrikalar",
-        "💼・işler"
     ],
 
     "👥 HALK": [
-        "💬・sohbet",
+        "💬・şehir-sohbeti",
         "🏙️・şehirler",
-        "🏠・evler"
+        "🏠・evler",
     ],
 
     "📰 MEDYA": [
         "📰・son-dakika",
-        "🗞️・gazeteler"
+        "🗞️・gazeteler",
     ],
 
-    "🎖️ ORDU": [
-        "🎖️・ordu",
-        "📋・askerler",
-        "⚔️・askeri-rapor"
+    "🌎 DIŞ İLİŞKİLER": [
+        "🌎・diplomasi",
+        "⚔️・savaş",
     ],
 
-    "🔐 YÖNETİM": [
-        "🔐・yetkili",
+    "⚙️ YÖNETİM": [
+        "🔐・yetkili-komutları",
         "📋・başvurular",
         "📝・şikayetler",
-        "🤖・bot-komutları"
-    ]
+        "📊・loglar",
+    ],
 }
 
-READ_ONLY = {
+
+# Sadece bu kanallarda normal vatandaş yazamaz.
+READ_ONLY_CHANNELS = {
     "📜・kurallar",
     "📢・duyurular",
     "🌍・ülke-bilgileri",
-    "🗺️・harita",
-    "📜・kanunlar",
     "📰・son-dakika",
-    "📨・ülke-istekleri"
+    "🔐・yetkili-komutları",
+    "📊・loglar",
 }
 
-# =========================================================
-# FABRİKALAR
-# =========================================================
-
-FACTORIES = {
-    "tarım": {
-        "name": "🌾 Tarım Tesisi",
-        "price": 15000,
-        "income": 1500
-    },
-    "demir": {
-        "name": "⛏️ Demir Fabrikası",
-        "price": 25000,
-        "income": 2500
-    },
-    "çelik": {
-        "name": "🏭 Çelik Fabrikası",
-        "price": 40000,
-        "income": 4000
-    },
-    "otomobil": {
-        "name": "🚗 Otomobil Fabrikası",
-        "price": 60000,
-        "income": 6000
-    },
-    "elektronik": {
-        "name": "💻 Elektronik Fabrikası",
-        "price": 75000,
-        "income": 7500
-    },
-    "gemi": {
-        "name": "🚢 Gemi Fabrikası",
-        "price": 90000,
-        "income": 9000
-    },
-    "uçak": {
-        "name": "✈️ Havacılık Tesisi",
-        "price": 120000,
-        "income": 12000
-    },
-    "enerji": {
-        "name": "⚡ Enerji Santrali",
-        "price": 100000,
-        "income": 10000
-    }
-}
-
-# =========================================================
-# MARKET
-# Tamamen oyun içi kurgu birim/eşya sistemi
-# =========================================================
-
-MARKET = {
-    "piyade": ("👥 Piyade Birliği", 1000, "army"),
-    "zirhli": ("🛡️ Zırhlı Birlik", 3000, "army"),
-    "tank": ("🚜 Tank Birliği", 5000, "army"),
-    "topcu": ("🎯 Topçu Birliği", 4500, "army"),
-    "kesif": ("🔭 Keşif Birliği", 2500, "army"),
-    "hava": ("✈️ Hava Birliği", 8000, "army"),
-    "iha": ("🛰️ Keşif İHA Birliği", 6000, "army"),
-    "hava_savunma": ("🛡️ Hava Savunma Birliği", 7000, "defense"),
-    "helikopter": ("🚁 Helikopter Birliği", 7500, "army"),
-    "nakliye": ("🛫 Nakliye Birliği", 5500, "army"),
-    "deniz": ("⚓ Deniz Birliği", 8000, "army"),
-    "denizalti": ("🌊 Deniz Birliği", 10000, "army"),
-    "firkateyn": ("🚢 Fırkateyn Birliği", 12000, "army"),
-    "destroyer": ("🚢 Büyük Gemi Birliği", 15000, "army"),
-    "amfibi": ("🌊 Amfibi Birlik", 9000, "army"),
-    "muhendis": ("🔧 Mühendis Birliği", 3500, "defense"),
-    "lojistik": ("📦 Lojistik Birliği", 4000, "defense"),
-    "radar": ("📡 Radar Sistemi", 5000, "defense"),
-    "komuta": ("🏛️ Komuta Merkezi", 7500, "defense"),
-    "sahil": ("🛡️ Sahil Savunma", 6500, "defense"),
-    "baris": ("🕊️ Barış Gücü", 3000, "defense"),
-    "siber": ("💻 Siber Savunma Birimi", 7000, "defense"),
-    "uydu": ("🛰️ Uydu Birimi", 9000, "defense"),
-    "istihbarat": ("🕵️ İstihbarat Birimi", 6000, "defense"),
-    "ozel": ("🎖️ Özel Birlik", 9000, "army"),
-    "muhafiz": ("🏰 Muhafız Birliği", 4500, "defense"),
-    "strateji": ("🗺️ Strateji Birimi", 5000, "defense"),
-    "arac": ("🚙 Askeri Araç Birliği", 3500, "army"),
-    "destek": ("📦 Destek Birliği", 2500, "defense")
-}
 
 # =========================================================
 # BOT HAZIR
@@ -549,83 +257,10 @@ MARKET = {
 
 @bot.event
 async def on_ready():
-
-    print("======================================")
-    print(f"BOT: {bot.user}")
-    print(f"SUNUCU: {len(bot.guilds)}")
-    print("ÜLKE RP BOT AKTİF")
-    print("======================================")
-
-    if not factory_income.is_running():
-        factory_income.start()
-
-
-# =========================================================
-# FABRİKA OTOMATİK GELİR
-# =========================================================
-
-@tasks.loop(minutes=1)
-async def factory_income():
-
-    current = now()
-
-    factories = db.execute(
-        "SELECT * FROM factories"
-    ).fetchall()
-
-    for factory in factories:
-
-        last_paid = factory["last_paid"]
-
-        if last_paid <= 0:
-            db.execute(
-                """
-                UPDATE factories
-                SET last_paid=?
-                WHERE id=?
-                """,
-                (
-                    current,
-                    factory["id"]
-                )
-            )
-            continue
-
-        elapsed = current - last_paid
-
-        if elapsed < 3600:
-            continue
-
-        hours = elapsed // 3600
-        income = factory["hourly_income"] * hours
-
-        db.execute(
-            """
-            UPDATE users
-            SET balance=balance+?
-            WHERE guild_id=?
-            AND user_id=?
-            """,
-            (
-                income,
-                factory["guild_id"],
-                factory["owner_id"]
-            )
-        )
-
-        db.execute(
-            """
-            UPDATE factories
-            SET last_paid=?
-            WHERE id=?
-            """,
-            (
-                last_paid + hours * 3600,
-                factory["id"]
-            )
-        )
-
-    db.commit()
+    print("====================================")
+    print(f"BOT AKTİF: {bot.user}")
+    print(f"SUNUCU SAYISI: {len(bot.guilds)}")
+    print("====================================")
 
 
 # =========================================================
@@ -635,483 +270,637 @@ async def factory_income():
 @bot.command()
 async def yardım(ctx):
 
-    e = discord.Embed(
-        title="🌍 ÜLKE RP KOMUTLARI",
-        description="Ülke RP sistemindeki komutlar",
+    embed = discord.Embed(
+        title="🌍 ÜLKE RP BOT",
+        description="Kullanılabilir komutlar:",
         colour=discord.Colour.blue()
     )
 
-    e.add_field(
+    embed.add_field(
         name="👤 VATANDAŞ",
         value=(
-            "`.kayıt İsim`\n"
             "`.profil`\n"
-            "`.bal`\n"
-            "`.çalış`\n"
+            "`.para`\n"
             "`.öde @üye miktar`\n"
-            "`.işler`\n"
-            "`.iş meslek`"
+            "`.şehir`\n"
+            "`.ülke`"
         ),
         inline=False
     )
 
-    e.add_field(
-        name="🌍 ÜLKE",
+    embed.add_field(
+        name="💼 MESLEK",
         value=(
-            "`.ülkeler`\n"
-            "`.ülkeiste ülke`\n"
-            "`.ülkem`\n"
-            "`.ülkebilgi ülke`\n"
-            "`.harita`"
+            "`.işler`\n"
+            "`.iş meslek`\n"
+            "`.çalış`"
         ),
         inline=False
     )
 
-    e.add_field(
+    embed.add_field(
         name="💰 EKONOMİ",
         value=(
             "`.banka yatır miktar`\n"
             "`.banka çek miktar`\n"
-            "`.market`\n"
-            "`.satınal ürün miktar`\n"
-            "`.envanter`\n"
-            "`.fabrikalar`\n"
-            "`.fabrika al tür`"
+            "`.şirketkur isim`\n"
+            "`.şirket`\n"
+            "`.işeal @üye`\n"
+            "`.ev al`"
         ),
         inline=False
     )
 
-    e.add_field(
-        name="⚔️ RP SİSTEMİ",
+    embed.add_field(
+        name="🗳️ SİYASET",
         value=(
-            "`.ordu`\n"
-            "`.asker`\n"
-            "`.savaş @ülke`\n"
-            "`.savaşlar`\n"
-            "`.barış @ülke`\n"
-            "`.diplomasi`"
+            "`.adayol`\n"
+            "`.adaylar`\n"
+            "`.oyver @aday`\n"
+            "`.seçim durum`"
         ),
         inline=False
     )
 
     if is_staff(ctx.author):
-
-        e.add_field(
+        embed.add_field(
             name="🔐 YETKİLİ",
             value=(
                 "`.kur`\n"
-                "`.ülkever @üye ülke`\n"
-                "`.ülkereddet id`\n"
-                "`.istekler`\n"
-                "`.duyuru mesaj`\n"
+                "`.kayıt @oyuncu İsim`\n"
                 "`.söyle mesaj`\n"
-                "`.temizle sayı`"
+                "`.duyuru mesaj`\n"
+                "`.temizle sayı`\n"
+                "`.embed Başlık | Mesaj`\n"
+                "`.bilgi`"
             ),
             inline=False
         )
 
-    await ctx.send(embed=e)
+    await ctx.send(embed=embed)
 
 
 # =========================================================
-# KUR
+# .KUR
 # =========================================================
 
 @bot.command()
-@commands.cooldown(
-    1,
-    60,
-    commands.BucketType.guild
-)
+@commands.cooldown(1, 60, commands.BucketType.guild)
 async def kur(ctx):
 
     if not is_management(ctx.author):
         return await ctx.send(
-            "❌ Bu komutu sadece yönetim kullanabilir."
+            "❌ Bu komutu sadece **Kurucu / Baş Yönetici / Yönetici** kullanabilir."
         )
 
-    me = ctx.guild.me
+    guild = ctx.guild
+    me = guild.me
+
+    # -----------------------------------------------------
+    # BOT İZİNLERİ
+    # -----------------------------------------------------
 
     if not me.guild_permissions.administrator:
-        return await ctx.send(
-            "❌ Botun **Yönetici** izni olmalı."
-        )
+        missing = []
 
-    status = await ctx.send(
+        if not me.guild_permissions.manage_channels:
+            missing.append("Kanalları Yönet")
+
+        if not me.guild_permissions.manage_roles:
+            missing.append("Rolleri Yönet")
+
+        if missing:
+            return await ctx.send(
+                "❌ Botun gerekli izinleri yok:\n"
+                + "\n".join(f"• {x}" for x in missing)
+                + "\n\nEn kolay çözüm: Bot rolüne **Yönetici** izni ver."
+            )
+
+    msg = await ctx.send(
         "🏗️ **ÜLKE RP KURULUYOR...**\n"
-        "Bu işlem mevcut kanalları ve botun silebildiği rolleri temizleyecek."
+        "⚠️ Mevcut kanallar ve RP rolleri temizleniyor."
     )
 
-    await asyncio.sleep(2)
+    # =====================================================
+    # 1 — TÜM KANALLARI SİL
+    # =====================================================
 
-    # -----------------------------------------------------
-    # KANALLARI SİL
-    # -----------------------------------------------------
+    deleted_channels = 0
 
-    for channel in list(ctx.guild.channels):
+    # Kategoriler dahil bütün kanalları siliyoruz.
+    # Discord kanal silindiğinde kategorinin altındaki
+    # kanallar da ayrıca silinebilir; bu yüzden liste alıyoruz.
 
-        if channel.is_default():
-            continue
+    for channel in list(guild.channels):
 
         try:
             await channel.delete(
-                reason="Ülke RP sıfırlama"
+                reason="Ülke RP tam sunucu kurulumu"
             )
-            await asyncio.sleep(0.15)
+            deleted_channels += 1
 
-        except Exception as error:
+        except discord.Forbidden:
             print(
-                f"Kanal silinemedi: "
-                f"{channel.name} -> {error}"
+                f"[KANAL] Silinemedi (izin): {channel.name}"
             )
 
-    # -----------------------------------------------------
-    # ROLLERİ SİL
-    # -----------------------------------------------------
+        except discord.HTTPException as e:
+            print(
+                f"[KANAL] Silinemedi: {channel.name} -> {e}"
+            )
 
-    for role in list(ctx.guild.roles):
+    # =====================================================
+    # 2 — ESKİ RP ROLLERİNİ SİL
+    # =====================================================
 
+    deleted_roles = 0
+
+    for role in list(guild.roles):
+
+        # @everyone silinemez.
         if role.is_default():
             continue
 
-        if role.managed:
+        # Botun kendi rolü ve üstündeki roller silinemez.
+        if role >= me.top_role:
+            print(
+                f"[ROL] Botun üstünde, silinemedi: {role.name}"
+            )
             continue
 
+        # Yönetici rolü dışında bütün eski roller silinir.
         try:
             await role.delete(
-                reason="Ülke RP sıfırlama"
+                reason="Ülke RP tam sunucu kurulumu"
             )
-            await asyncio.sleep(0.15)
+            deleted_roles += 1
 
-        except Exception as error:
+        except discord.Forbidden:
             print(
-                f"Rol silinemedi: "
-                f"{role.name} -> {error}"
+                f"[ROL] Silinemedi: {role.name}"
             )
 
-    await status.edit(
-        content="🎭 Roller oluşturuluyor..."
+        except discord.HTTPException as e:
+            print(
+                f"[ROL] Hata: {role.name} -> {e}"
+            )
+
+    await msg.edit(
+        content=(
+            "🎭 **ROLLER OLUŞTURULUYOR...**\n"
+            f"🗑️ Silinen kanallar: `{deleted_channels}`\n"
+            f"🗑️ Silinen roller: `{deleted_roles}`"
+        )
     )
 
-    # -----------------------------------------------------
-    # ROLLER
-    # -----------------------------------------------------
+    # =====================================================
+    # 3 — YENİ ROLLER
+    # =====================================================
 
-    created_roles = {}
+    roles = {}
 
-    for role_name, colour in ALL_ROLES.items():
+    all_roles = {}
+
+    # Önce yetkili roller
+    all_roles.update(STAFF_ROLES)
+
+    # Sonra RP roller
+    all_roles.update(RP_ROLES)
+
+    for role_name, colour in all_roles.items():
 
         try:
-
-            role = await ctx.guild.create_role(
+            role = await guild.create_role(
                 name=role_name,
                 colour=colour,
-                reason="Ülke RP kurulumu"
+                reason="Ülke RP rol kurulumu"
             )
 
-            created_roles[role_name] = role
+            roles[role_name] = role
 
-            await asyncio.sleep(0.2)
-
-        except Exception as error:
-
+        except discord.Forbidden:
             print(
-                f"Rol oluşturulamadı: "
-                f"{role_name} -> {error}"
+                f"[ROL] Oluşturulamadı: {role_name}"
             )
 
-    # -----------------------------------------------------
-    # KANALLAR
-    # -----------------------------------------------------
+        except discord.HTTPException as e:
+            print(
+                f"[ROL] Hata: {role_name} -> {e}"
+            )
 
-    await status.edit(
-        content="📁 Kategoriler ve kanallar oluşturuluyor..."
+    await msg.edit(
+        content="📁 **KATEGORİLER VE KANALLAR OLUŞTURULUYOR...**"
     )
+
+    # =====================================================
+    # 4 — KANALLARI OLUŞTUR
+    # =====================================================
+
+    created_channels = 0
 
     for category_name, channel_names in CATEGORIES.items():
 
         try:
-
-            category = await ctx.guild.create_category(
+            category = await guild.create_category(
                 category_name,
-                reason="Ülke RP kurulumu"
+                reason="Ülke RP kategori kurulumu"
             )
 
-        except Exception as error:
-
+        except discord.Forbidden:
             print(
-                f"Kategori hatası: {error}"
+                f"[KATEGORİ] Oluşturulamadı: {category_name}"
+            )
+            continue
+
+        except discord.HTTPException as e:
+            print(
+                f"[KATEGORİ] Hata: {category_name} -> {e}"
             )
             continue
 
         for channel_name in channel_names:
 
             try:
-
-                channel = await ctx.guild.create_text_channel(
+                channel = await guild.create_text_channel(
                     channel_name,
                     category=category,
-                    reason="Ülke RP kurulumu"
+                    reason="Ülke RP kanal kurulumu"
                 )
 
-                # Herkes okuyabilir
-                everyone = discord.PermissionOverwrite(
-                    view_channel=True,
-                    read_message_history=True
+                created_channels += 1
+
+            except discord.Forbidden:
+                print(
+                    f"[KANAL] Oluşturulamadı: {channel_name}"
                 )
+                continue
 
-                if channel_name in READ_ONLY:
-                    everyone.send_messages = False
-                else:
-                    everyone.send_messages = True
+            except discord.HTTPException as e:
+                print(
+                    f"[KANAL] Hata: {channel_name} -> {e}"
+                )
+                continue
 
+            # =================================================
+            # EVERYONE İZİNLERİ
+            # =================================================
+
+            everyone = discord.PermissionOverwrite()
+
+            everyone.view_channel = True
+            everyone.read_message_history = True
+
+            if channel_name in READ_ONLY_CHANNELS:
+                everyone.send_messages = False
+            else:
+                everyone.send_messages = True
+
+            try:
                 await channel.set_permissions(
-                    ctx.guild.default_role,
-                    overwrite=everyone
+                    guild.default_role,
+                    overwrite=everyone,
+                    reason="Ülke RP temel kanal izinleri"
                 )
 
-                # Yetkililer
-                for role_name in STAFF_ROLES:
+            except discord.HTTPException:
+                pass
 
-                    role = created_roles.get(role_name)
+            # =================================================
+            # YETKİLİ ROLLERİ
+            # =================================================
+
+            for staff_name in STAFF_ROLES:
+
+                staff_role = roles.get(staff_name)
+
+                if not staff_role:
+                    continue
+
+                overwrite = discord.PermissionOverwrite()
+
+                overwrite.view_channel = True
+                overwrite.read_message_history = True
+                overwrite.send_messages = True
+                overwrite.manage_messages = True
+
+                # Yönetim kanallarında daha fazla yetki.
+                if category_name == "⚙️ YÖNETİM":
+                    overwrite.manage_channels = True
+
+                try:
+                    await channel.set_permissions(
+                        staff_role,
+                        overwrite=overwrite,
+                        reason="Ülke RP yetkili izinleri"
+                    )
+
+                except discord.HTTPException:
+                    pass
+
+            # =================================================
+            # KAYIT KANALI
+            # =================================================
+
+            if channel_name == "🪪・vatandaş-kayıt":
+
+                for staff_name in STAFF_ROLES:
+
+                    role = roles.get(staff_name)
 
                     if not role:
                         continue
 
-                    permissions = discord.PermissionOverwrite(
-                        view_channel=True,
-                        read_message_history=True,
-                        send_messages=True,
-                        manage_messages=True,
-                        embed_links=True,
-                        attach_files=True
-                    )
+                    try:
+                        await channel.set_permissions(
+                            role,
+                            view_channel=True,
+                            send_messages=True,
+                            read_message_history=True,
+                            manage_messages=True,
+                            reason="Vatandaş kayıt izinleri"
+                        )
+                    except discord.HTTPException:
+                        pass
 
-                    await channel.set_permissions(
-                        role,
-                        overwrite=permissions
-                    )
+    # =====================================================
+    # 5 — ÜLKE VERİSİ
+    # =====================================================
 
-                await asyncio.sleep(0.15)
-
-            except Exception as error:
-
-                print(
-                    f"Kanal oluşturulamadı: "
-                    f"{channel_name} -> {error}"
-                )
-
-    # -----------------------------------------------------
-    # 30 ÜLKEYİ VERİTABANINA EKLE
-    # -----------------------------------------------------
-
-    db.execute(
+    country = db.execute(
         """
-        INSERT OR REPLACE INTO settings
-        (guild_id, country_created)
-        VALUES (?, 1)
+        SELECT *
+        FROM countries
+        WHERE guild_id=?
         """,
-        (ctx.guild.id,)
-    )
+        (guild.id,)
+    ).fetchone()
 
-    for country_name in COUNTRIES:
+    if not country:
 
-        existing = get_country(
-            ctx.guild.id,
-            country_name
+        db.execute(
+            """
+            INSERT INTO countries
+            (
+                guild_id,
+                name,
+                capital,
+                president_id,
+                treasury,
+                founded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                guild.id,
+                "Yeni Cumhuriyet",
+                "Başkent",
+                ctx.author.id,
+                100000,
+                now()
+            )
         )
 
-        if not existing:
+        db.commit()
 
-            db.execute(
-                """
-                INSERT INTO countries
-                (
-                    guild_id,
-                    name,
-                    owner_id,
-                    president_id,
-                    treasury,
-                    population,
-                    army,
-                    defense,
-                    last_income
-                )
-                VALUES (?, ?, 0, 0, 100000, 0, 0, 0, ?)
-                """,
-                (
-                    ctx.guild.id,
-                    country_name,
-                    now()
-                )
-            )
-
-    db.commit()
-
-    # -----------------------------------------------------
-    # KURALLAR
-    # -----------------------------------------------------
+    # =====================================================
+    # 6 — KURALLAR
+    # =====================================================
 
     rules = discord.utils.get(
-        ctx.guild.text_channels,
+        guild.text_channels,
         name="📜・kurallar"
     )
 
     if rules:
 
-        await rules.send(
-            embed=discord.Embed(
-                title="📜 ÜLKE RP KURALLARI",
-                description=(
-                    "1. Saygılı davran.\n"
-                    "2. Spam yapma.\n"
-                    "3. Reklam yapma.\n"
-                    "4. Meta Gaming yapma.\n"
-                    "5. Power Gaming yapma.\n"
-                    "6. RP dışı avantaj sağlamaya çalışma.\n"
-                    "7. Gerçek hayat bilgilerini paylaşma.\n"
-                    "8. Savaş sistemi yalnızca oyun içidir.\n"
-                    "9. Yetkili kararlarına uy.\n"
-                    "10. Açık/bug kullanma."
-                ),
-                colour=discord.Colour.blue()
-            )
+        embed = discord.Embed(
+            title="📜 ÜLKE RP KURALLARI",
+            description=(
+                "**1.** Saygılı davran.\n"
+                "**2.** Spam ve flood yapma.\n"
+                "**3.** Reklam yapma.\n"
+                "**4.** Meta Gaming yapma.\n"
+                "**5.** Power Gaming yapma.\n"
+                "**6.** Başka oyuncunun karakterini zorla yönetme.\n"
+                "**7.** Yetkili kararlarına uy.\n"
+                "**8.** Bug veya açıkları kötüye kullanma.\n"
+                "**9.** RP ile gerçek hayatı birbirinden ayır.\n"
+                "**10.** Kişisel bilgilerini paylaşma."
+            ),
+            colour=discord.Colour.blue()
         )
 
-    # -----------------------------------------------------
-    # ÜLKE BİLGİ
-    # -----------------------------------------------------
+        await rules.send(embed=embed)
+
+    # =====================================================
+    # 7 — BİLGİ KANALI
+    # =====================================================
 
     info = discord.utils.get(
-        ctx.guild.text_channels,
+        guild.text_channels,
         name="🌍・ülke-bilgileri"
     )
 
     if info:
 
-        await info.send(
-            embed=discord.Embed(
-                title="🌍 ÜLKE RP'YE HOŞ GELDİN",
-                description=(
-                    "Ülke seçmek için:\n"
-                    "`.ülkeler`\n\n"
-                    "Ülke istemek için:\n"
-                    "`.ülkeiste Türkiye`\n\n"
-                    "Para:\n"
-                    "`.bal`\n\n"
-                    "Çalışmak:\n"
-                    "`.çalış`\n\n"
-                    "Market:\n"
-                    "`.market`\n\n"
-                    "Harita:\n"
-                    "`.harita`\n\n"
-                    "Komutların tamamı için:\n"
-                    "`.yardım`"
-                ),
-                colour=discord.Colour.green()
-            )
+        embed = discord.Embed(
+            title="🌍 ÜLKE RP SİSTEMİ",
+            description=(
+                "Ülke RP'ye hoş geldiniz!\n\n"
+                "🪪 Vatandaş kaydını yetkililer yapar.\n"
+                "💰 Ekonomi sistemi aktiftir.\n"
+                "💼 Meslek sistemi aktiftir.\n"
+                "🏢 Şirket sistemi aktiftir.\n"
+                "🗳️ Seçim sistemi aktiftir.\n\n"
+                "📌 Komutları görmek için `.yardım` yaz."
+            ),
+            colour=discord.Colour.green()
         )
 
-    await status.edit(
+        await info.send(embed=embed)
+
+    # =====================================================
+    # 8 — KURULUM SONU
+    # =====================================================
+
+    await msg.edit(
         content=(
-            "✅ **ÜLKE RP KURULDU!**\n\n"
-            "🌍 30 ülke hazır\n"
-            "🎭 Roller hazır\n"
-            "📁 Kanallar hazır\n"
-            "🔐 İzinler ayarlandı\n"
-            "💰 Ekonomi hazır\n"
-            "🏭 Fabrika sistemi hazır\n"
-            "🛒 Market hazır\n"
-            "⚔️ Savaş sistemi hazır\n"
-            "🗺️ Harita hazır\n"
-            "🗳️ Ülke başvuru sistemi hazır\n\n"
-            "`.yardım` yaz."
+            "✅ **ÜLKE RP KURULUMU TAMAMLANDI!**\n\n"
+            f"🗑️ Silinen kanallar: `{deleted_channels}`\n"
+            f"🗑️ Silinen roller: `{deleted_roles}`\n"
+            f"🎭 Oluşturulan roller: `{len(roles)}`\n"
+            f"📁 Oluşturulan kanallar: `{created_channels}`\n"
+            "🔐 Kanal izinleri ayarlandı.\n"
+            "🌍 Ülke sistemi hazır.\n"
+            "💰 Ekonomi sistemi hazır.\n"
+            "🗳️ Seçim sistemi hazır.\n\n"
+            "📌 Vatandaş eklemek için:\n"
+            "`.kayıt @oyuncu İsim Soyisim`"
         )
     )
 
 
 # =========================================================
-# KAYIT
+# YETKİLİ KAYIT
 # =========================================================
 
 @bot.command()
-async def kayıt(ctx, *, isim=None):
+async def kayıt(
+    ctx,
+    member: discord.Member = None,
+    *,
+    isim=None
+):
 
+    # SADECE YETKİLİ
+    if not is_staff(ctx.author):
+        return await ctx.send(
+            "❌ Bu komutu sadece yetkililer kullanabilir."
+        )
+
+    # ETİKET ZORUNLU
+    if member is None:
+        return await ctx.send(
+            "❌ Kullanım:\n"
+            "`.kayıt @oyuncu İsim Soyisim`"
+        )
+
+    # İSİM ZORUNLU
     if not isim:
         return await ctx.send(
-            "❌ Kullanım: `.kayıt İsim Soyisim`"
+            "❌ Oyuncunun RP ismini yazmalısın.\n"
+            "Örnek:\n"
+            "`.kayıt @Oyuncu Ahmet Yılmaz`"
+        )
+
+    isim = isim.strip()
+
+    if len(isim) < 2:
+        return await ctx.send(
+            "❌ İsim çok kısa."
         )
 
     if len(isim) > 40:
         return await ctx.send(
-            "❌ İsim çok uzun."
+            "❌ İsim 40 karakterden uzun olamaz."
         )
 
-    if get_user(
-        ctx.guild.id,
-        ctx.author.id
-    ):
+    # BOT KAYDI ENGELLE
+    if member.bot:
         return await ctx.send(
-            "❌ Zaten kayıtlısın."
+            "❌ Botlar vatandaş olarak kaydedilemez."
         )
 
-    create_user(
+    # Zaten kayıtlı mı?
+    existing = get_user(
         ctx.guild.id,
-        ctx.author.id,
+        member.id
+    )
+
+    if existing:
+        return await ctx.send(
+            f"❌ {member.mention} zaten kayıtlı.\n"
+            f"🪪 Mevcut isim: **{existing['name']}**"
+        )
+
+    # KAYDET
+    ensure_user(
+        ctx.guild.id,
+        member.id,
         isim
     )
 
-    role = discord.utils.get(
+    # =====================================================
+    # VATANDAŞ ROLLERİ
+    # =====================================================
+
+    new_citizen = discord.utils.get(
         ctx.guild.roles,
         name="🌱 Yeni Vatandaş"
     )
 
-    if role:
-
-        try:
-            await ctx.author.add_roles(role)
-        except:
-            pass
-
-    await ctx.send(
-        f"🪪 **{isim}** olarak kayıt oldun!\n"
-        f"💰 Başlangıç paran: **₺1.000**"
+    citizen = discord.utils.get(
+        ctx.guild.roles,
+        name="👤 Vatandaş"
     )
 
+    # Yeni vatandaş varsa kaldır
+    if new_citizen:
 
-# =========================================================
-# BAL
-# =========================================================
+        if new_citizen < ctx.guild.me.top_role:
 
-@bot.command()
-async def bal(ctx):
+            try:
+                await member.remove_roles(
+                    new_citizen,
+                    reason="Vatandaş kaydı tamamlandı"
+                )
+            except discord.HTTPException:
+                pass
 
-    user = get_user(
-        ctx.guild.id,
-        ctx.author.id
-    )
+    # Vatandaş rolünü ver
+    if citizen:
 
-    if not user:
-        return await ctx.send(
-            "❌ Önce `.kayıt İsim` yap."
+        if citizen < ctx.guild.me.top_role:
+
+            try:
+                await member.add_roles(
+                    citizen,
+                    reason="Yetkili tarafından vatandaş kaydı"
+                )
+            except discord.HTTPException:
+                pass
+
+    # =====================================================
+    # NİCKNAME
+    # =====================================================
+
+    try:
+
+        await member.edit(
+            nick=isim,
+            reason="Yetkili tarafından vatandaş kaydı"
         )
 
-    country = get_owned_country(
-        ctx.guild.id,
-        ctx.author.id
+    except discord.Forbidden:
+        pass
+
+    except discord.HTTPException:
+        pass
+
+    # =====================================================
+    # MESAJ
+    # =====================================================
+
+    embed = discord.Embed(
+        title="🪪 VATANDAŞ KAYDI",
+        colour=discord.Colour.green()
     )
 
-    country_text = "Yok"
-
-    if country:
-        country_text = country["name"]
-
-    await ctx.send(
-        f"💰 **Bakiye**\n\n"
-        f"👛 Cüzdan: **₺{user['balance']:,}**\n"
-        f"🏦 Banka: **₺{user['bank']:,}**\n"
-        f"🌍 Ülke: **{country_text}**"
+    embed.add_field(
+        name="👤 Oyuncu",
+        value=member.mention,
+        inline=True
     )
+
+    embed.add_field(
+        name="🪪 RP İsmi",
+        value=isim,
+        inline=True
+    )
+
+    embed.add_field(
+        name="💰 Başlangıç Parası",
+        value="₺1.000",
+        inline=True
+    )
+
+    embed.add_field(
+        name="🔨 Kayıt Yapan",
+        value=ctx.author.mention,
+        inline=True
+    )
+
+    await ctx.send(embed=embed)
 
 
 # =========================================================
@@ -1133,106 +922,65 @@ async def profil(
 
     if not user:
         return await ctx.send(
-            "❌ Bu kişi kayıtlı değil."
+            "❌ Bu kişinin vatandaş kaydı bulunamadı."
         )
 
-    country = get_owned_country(
-        ctx.guild.id,
-        member.id
-    )
-
-    e = discord.Embed(
+    embed = discord.Embed(
         title=f"🪪 {user['name']}",
         colour=discord.Colour.blue()
     )
 
-    e.add_field(
-        name="💰 Para",
+    embed.add_field(
+        name="💰 Cüzdan",
         value=f"₺{user['balance']:,}",
         inline=True
     )
 
-    e.add_field(
+    embed.add_field(
         name="🏦 Banka",
         value=f"₺{user['bank']:,}",
         inline=True
     )
 
-    e.add_field(
+    embed.add_field(
         name="💼 Meslek",
         value=user["job"],
         inline=True
     )
 
-    e.add_field(
+    embed.add_field(
+        name="🏙️ Şehir",
+        value=user["city"],
+        inline=True
+    )
+
+    embed.add_field(
         name="🌍 Ülke",
-        value=country["name"] if country else "Yok",
+        value=user["country"] or "Yok",
         inline=True
     )
 
-    e.add_field(
-        name="🏭 Fabrika",
-        value=str(user["factory_count"]),
+    embed.add_field(
+        name="🏠 Ev",
+        value=user["house"] or "Yok",
         inline=True
     )
 
-    e.add_field(
-        name="🆔 Discord",
-        value=member.mention,
+    embed.add_field(
+        name="🏢 Şirket",
+        value=user["company"] or "Yok",
         inline=True
     )
 
-    await ctx.send(embed=e)
+    await ctx.send(embed=embed)
 
 
 # =========================================================
-# ÇALIŞ
+# PARA
 # =========================================================
 
-JOBS = {
-    "işçi": ("İşçi", 500),
-    "öğretmen": ("Öğretmen", 700),
-    "polis": ("Polis", 800),
-    "doktor": ("Doktor", 900),
-    "mühendis": ("Mühendis", 1000),
-    "gazeteci": ("Gazeteci", 650),
-    "çiftçi": ("Çiftçi", 550),
-    "memur": ("Memur", 750)
-}
-
-
 @bot.command()
-async def işler(ctx):
-
-    lines = []
-
-    for key, data in JOBS.items():
-
-        lines.append(
-            f"`{key}` — {data[0]} — ₺{data[1]:,}"
-        )
-
-    await ctx.send(
-        "💼 **MESLEKLER**\n\n"
-        + "\n".join(lines)
-        + "\n\nMeslek seçmek: `.iş işçi`"
-    )
-
-
-@bot.command()
-async def iş(ctx, meslek=None):
-
-    if not meslek:
-        return await ctx.send(
-            "❌ `.işler` yaz."
-        )
-
-    meslek = meslek.lower()
-
-    if meslek not in JOBS:
-        return await ctx.send(
-            "❌ Böyle bir meslek yok."
-        )
+async def para(ctx):
 
     user = get_user(
         ctx.guild.id,
@@ -1241,85 +989,12 @@ async def iş(ctx, meslek=None):
 
     if not user:
         return await ctx.send(
-            "❌ Önce kayıt ol."
+            "❌ Vatandaş kaydın yok."
         )
-
-    job_name = JOBS[meslek][0]
-
-    db.execute(
-        """
-        UPDATE users
-        SET job=?
-        WHERE guild_id=? AND user_id=?
-        """,
-        (
-            job_name,
-            ctx.guild.id,
-            ctx.author.id
-        )
-    )
-
-    db.commit()
 
     await ctx.send(
-        f"💼 Mesleğin **{job_name}** oldu."
-    )
-
-
-@bot.command()
-@commands.cooldown(
-    1,
-    120,
-    commands.BucketType.user
-)
-async def çalış(ctx):
-
-    user = get_user(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    if not user:
-        return await ctx.send(
-            "❌ Önce kayıt ol."
-        )
-
-    job = None
-
-    for data in JOBS.values():
-
-        if data[0] == user["job"]:
-            job = data
-            break
-
-    if not job:
-        return await ctx.send(
-            "❌ Önce `.işler` ve `.iş meslek` kullan."
-        )
-
-    amount = job[1]
-
-    db.execute(
-        """
-        UPDATE users
-        SET balance=balance+?,
-            last_work=?
-        WHERE guild_id=? AND user_id=?
-        """,
-        (
-            amount,
-            now(),
-            ctx.guild.id,
-            ctx.author.id
-        )
-    )
-
-    db.commit()
-
-    await ctx.send(
-        f"💼 Çalıştın!\n"
-        f"💰 **₺{amount:,}** kazandın.\n"
-        f"⏳ Bir sonraki çalışma: **2 dakika**"
+        f"💰 Cüzdan: **₺{user['balance']:,}**\n"
+        f"🏦 Banka: **₺{user['bank']:,}**"
     )
 
 
@@ -1336,7 +1011,12 @@ async def öde(
 
     if not member or miktar <= 0:
         return await ctx.send(
-            "❌ `.öde @üye 500`"
+            "❌ Kullanım: `.öde @oyuncu 500`"
+        )
+
+    if member.bot or member.id == ctx.author.id:
+        return await ctx.send(
+            "❌ Geçerli bir vatandaş seç."
         )
 
     sender = get_user(
@@ -1351,7 +1031,7 @@ async def öde(
 
     if not sender or not receiver:
         return await ctx.send(
-            "❌ İki kişi de kayıtlı olmalı."
+            "❌ İki kişinin de kayıtlı olması gerekiyor."
         )
 
     if sender["balance"] < miktar:
@@ -1394,13 +1074,130 @@ async def öde(
 
 
 # =========================================================
+# MESLEKLER
+# =========================================================
+
+JOBS = {
+    "doktor": ("Doktor", 900),
+    "polis": ("Polis", 800),
+    "öğretmen": ("Öğretmen", 700),
+    "mühendis": ("Mühendis", 1000),
+    "gazeteci": ("Gazeteci", 650),
+    "işçi": ("İşçi", 500),
+}
+
+
+@bot.command()
+async def işler(ctx):
+
+    text = "\n".join(
+        f"• `{key}` — {name} — ₺{salary:,}/çalışma"
+        for key, (name, salary) in JOBS.items()
+    )
+
+    await ctx.send(
+        "💼 **MESLEKLER**\n\n" + text
+    )
+
+
+@bot.command()
+async def iş(ctx, meslek=None):
+
+    if not meslek or meslek.lower() not in JOBS:
+        return await ctx.send(
+            "❌ `.işler` yazarak meslekleri gör."
+        )
+
+    user = get_user(
+        ctx.guild.id,
+        ctx.author.id
+    )
+
+    if not user:
+        return await ctx.send(
+            "❌ Vatandaş kaydın yok."
+        )
+
+    job_name, _ = JOBS[meslek.lower()]
+
+    db.execute(
+        """
+        UPDATE users
+        SET job=?
+        WHERE guild_id=? AND user_id=?
+        """,
+        (
+            job_name,
+            ctx.guild.id,
+            ctx.author.id
+        )
+    )
+
+    db.commit()
+
+    await ctx.send(
+        f"💼 Mesleğin artık **{job_name}**."
+    )
+
+
+@bot.command()
+@commands.cooldown(1, 120, commands.BucketType.user)
+async def çalış(ctx):
+
+    user = get_user(
+        ctx.guild.id,
+        ctx.author.id
+    )
+
+    if not user:
+        return await ctx.send(
+            "❌ Vatandaş kaydın yok."
+        )
+
+    job = next(
+        (
+            value
+            for value in JOBS.values()
+            if value[0] == user["job"]
+        ),
+        None
+    )
+
+    if not job:
+        return await ctx.send(
+            "❌ Önce `.iş meslek` ile meslek seç."
+        )
+
+    amount = job[1]
+
+    db.execute(
+        """
+        UPDATE users
+        SET balance=balance+?
+        WHERE guild_id=? AND user_id=?
+        """,
+        (
+            amount,
+            ctx.guild.id,
+            ctx.author.id
+        )
+    )
+
+    db.commit()
+
+    await ctx.send(
+        f"💼 Çalıştın ve **₺{amount:,}** kazandın."
+    )
+
+
+# =========================================================
 # BANKA
 # =========================================================
 
 @bot.command()
 async def banka(
     ctx,
-    islem=None,
+    işlem=None,
     miktar: int = 0
 ):
 
@@ -1411,25 +1208,21 @@ async def banka(
 
     if not user:
         return await ctx.send(
-            "❌ Önce kayıt ol."
+            "❌ Vatandaş kaydın yok."
         )
 
-    if islem not in ["yatır", "çek"]:
+    if işlem not in {"yatır", "çek"} or miktar <= 0:
         return await ctx.send(
-            "❌ `.banka yatır 500`\n"
+            "❌ Kullanım:\n"
+            "`.banka yatır 500`\n"
             "`.banka çek 500`"
         )
 
-    if miktar <= 0:
-        return await ctx.send(
-            "❌ Miktar 0'dan büyük olmalı."
-        )
-
-    if islem == "yatır":
+    if işlem == "yatır":
 
         if user["balance"] < miktar:
             return await ctx.send(
-                "❌ Cüzdanında yeterli para yok."
+                "❌ Cüzdanda yeterli para yok."
             )
 
         db.execute(
@@ -1451,7 +1244,7 @@ async def banka(
 
         if user["bank"] < miktar:
             return await ctx.send(
-                "❌ Bankanda yeterli para yok."
+                "❌ Bankada yeterli para yok."
             )
 
         db.execute(
@@ -1472,587 +1265,20 @@ async def banka(
     db.commit()
 
     await ctx.send(
-        f"🏦 **₺{miktar:,}** {islem} işlemi tamamlandı."
+        f"🏦 **₺{miktar:,}** {işlem} işlemi tamamlandı."
     )
 
 
 # =========================================================
-# ÜLKELER
-# =========================================================
-
-@bot.command()
-async def ülkeler(ctx):
-
-    rows = db.execute(
-        """
-        SELECT *
-        FROM countries
-        WHERE guild_id=?
-        """,
-        (ctx.guild.id,)
-    ).fetchall()
-
-    if not rows:
-        return await ctx.send(
-            "❌ Ülkeler henüz kurulmamış. `.kur`"
-        )
-
-    lines = []
-
-    for country in rows:
-
-        if country["owner_id"]:
-
-            member = ctx.guild.get_member(
-                country["owner_id"]
-            )
-
-            owner = (
-                member.mention
-                if member
-                else "Bilinmiyor"
-            )
-
-            status = f"👑 {owner}"
-
-        else:
-            status = "🟢 Sahipsiz"
-
-        lines.append(
-            f"**{country['name']}** — {status}"
-        )
-
-    e = discord.Embed(
-        title="🌍 30 ÜLKE",
-        description="\n".join(lines),
-        colour=discord.Colour.green()
-    )
-
-    await ctx.send(embed=e)
-
-
-# =========================================================
-# ÜLKE İSTE
+# ŞİRKET KUR
 # =========================================================
 
 @bot.command()
-async def ülkeiste(ctx, *, ülke=None):
+async def şirketkur(ctx, *, isim=None):
 
-    if not ülke:
+    if not isim:
         return await ctx.send(
-            "❌ `.ülkeiste Türkiye`"
-        )
-
-    country = get_country(
-        ctx.guild.id,
-        ülke
-    )
-
-    if not country:
-        return await ctx.send(
-            "❌ Böyle bir ülke yok."
-        )
-
-    if country["owner_id"]:
-        return await ctx.send(
-            "❌ Bu ülke zaten alınmış."
-        )
-
-    if get_owned_country(
-        ctx.guild.id,
-        ctx.author.id
-    ):
-        return await ctx.send(
-            "❌ Zaten bir ülken var."
-        )
-
-    pending = db.execute(
-        """
-        SELECT *
-        FROM country_requests
-        WHERE guild_id=?
-        AND user_id=?
-        AND status='pending'
-        """,
-        (
-            ctx.guild.id,
-            ctx.author.id
-        )
-    ).fetchone()
-
-    if pending:
-        return await ctx.send(
-            "❌ Zaten bekleyen ülke başvurun var."
-        )
-
-    db.execute(
-        """
-        INSERT INTO country_requests
-        (
-            guild_id,
-            user_id,
-            country,
-            created_at
-        )
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            ctx.guild.id,
-            ctx.author.id,
-            ülke,
-            datetime.now(timezone.utc).isoformat()
-        )
-    )
-
-    db.commit()
-
-    await ctx.send(
-        f"📨 **{ülke}** için başvurun gönderildi.\n"
-        "Yetkililerin onaylaması gerekiyor."
-    )
-
-    channel = discord.utils.get(
-        ctx.guild.text_channels,
-        name="📨・ülke-istekleri"
-    )
-
-    if channel:
-
-        await channel.send(
-            f"📨 **Ülke Başvurusu**\n"
-            f"👤 Oyuncu: {ctx.author.mention}\n"
-            f"🌍 Ülke: **{ülke}**"
-        )
-
-
-# =========================================================
-# İSTEKLER
-# =========================================================
-
-@bot.command()
-async def istekler(ctx):
-
-    if not is_management(ctx.author):
-        return await ctx.send(
-            "❌ Yetkin yok."
-        )
-
-    rows = db.execute(
-        """
-        SELECT *
-        FROM country_requests
-        WHERE guild_id=?
-        AND status='pending'
-        ORDER BY id ASC
-        """,
-        (ctx.guild.id,)
-    ).fetchall()
-
-    if not rows:
-        return await ctx.send(
-            "📨 Bekleyen başvuru yok."
-        )
-
-    lines = []
-
-    for row in rows:
-
-        member = ctx.guild.get_member(
-            row["user_id"]
-        )
-
-        user = (
-            member.mention
-            if member
-            else str(row["user_id"])
-        )
-
-        lines.append(
-            f"**ID:** `{row['id']}` | "
-            f"{user} → **{row['country']}**"
-        )
-
-    await ctx.send(
-        "📨 **ÜLKE BAŞVURULARI**\n\n"
-        + "\n".join(lines)
-        + "\n\n"
-        "Onay: `.ülkever @üye Ülke`\n"
-        "Reddet: `.ülkereddet ID`"
-    )
-
-
-# =========================================================
-# ÜLKE VER
-# =========================================================
-
-@bot.command()
-async def ülkever(
-    ctx,
-    member: discord.Member = None,
-    *,
-    ülke=None
-):
-
-    if not is_management(ctx.author):
-        return await ctx.send(
-            "❌ Yetkin yok."
-        )
-
-    if not member or not ülke:
-        return await ctx.send(
-            "❌ `.ülkever @üye Türkiye`"
-        )
-
-    country = get_country(
-        ctx.guild.id,
-        ülke
-    )
-
-    if not country:
-        return await ctx.send(
-            "❌ Ülke bulunamadı."
-        )
-
-    if country["owner_id"]:
-        return await ctx.send(
-            "❌ Bu ülke zaten alınmış."
-        )
-
-    old_country = get_owned_country(
-        ctx.guild.id,
-        member.id
-    )
-
-    if old_country:
-        return await ctx.send(
-            "❌ Bu kişinin zaten ülkesi var."
-        )
-
-    db.execute(
-        """
-        UPDATE countries
-        SET owner_id=?,
-            president_id=?
-        WHERE guild_id=?
-        AND name=?
-        """,
-        (
-            member.id,
-            member.id,
-            ctx.guild.id,
-            ülke
-        )
-    )
-
-    db.execute(
-        """
-        UPDATE users
-        SET country=?
-        WHERE guild_id=?
-        AND user_id=?
-        """,
-        (
-            ülke,
-            ctx.guild.id,
-            member.id
-        )
-    )
-
-    db.execute(
-        """
-        UPDATE country_requests
-        SET status='approved'
-        WHERE guild_id=?
-        AND user_id=?
-        AND country=?
-        AND status='pending'
-        """,
-        (
-            ctx.guild.id,
-            member.id,
-            ülke
-        )
-    )
-
-    db.commit()
-
-    role = discord.utils.get(
-        ctx.guild.roles,
-        name="🌍 Ülke Başkanı"
-    )
-
-    if role:
-
-        try:
-            await member.add_roles(role)
-        except:
-            pass
-
-    await ctx.send(
-        f"✅ {member.mention} artık "
-        f"**{ülke}** ülkesinin başkanı."
-    )
-
-
-# =========================================================
-# ÜLKE REDDET
-# =========================================================
-
-@bot.command()
-async def ülkereddet(ctx, request_id: int = 0):
-
-    if not is_management(ctx.author):
-        return await ctx.send(
-            "❌ Yetkin yok."
-        )
-
-    if request_id <= 0:
-        return await ctx.send(
-            "❌ `.ülkereddet 12`"
-        )
-
-    row = db.execute(
-        """
-        SELECT *
-        FROM country_requests
-        WHERE id=?
-        AND guild_id=?
-        AND status='pending'
-        """,
-        (
-            request_id,
-            ctx.guild.id
-        )
-    ).fetchone()
-
-    if not row:
-        return await ctx.send(
-            "❌ Başvuru bulunamadı."
-        )
-
-    db.execute(
-        """
-        UPDATE country_requests
-        SET status='rejected'
-        WHERE id=?
-        """,
-        (request_id,)
-    )
-
-    db.commit()
-
-    await ctx.send(
-        f"❌ `{request_id}` numaralı başvuru reddedildi."
-    )
-
-
-# =========================================================
-# ÜLKEM
-# =========================================================
-
-@bot.command()
-async def ülkem(ctx):
-
-    country = get_owned_country(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    if not country:
-        return await ctx.send(
-            "❌ Sana verilmiş bir ülke yok."
-        )
-
-    await ctx.send(
-        f"🌍 **{country['name']}**\n\n"
-        f"💰 Hazine: **₺{country['treasury']:,}**\n"
-        f"👥 Nüfus: **{country['population']:,}**\n"
-        f"🎖️ Ordu: **{country['army']:,}**\n"
-        f"🛡️ Savunma: **{country['defense']:,}**"
-    )
-
-
-# =========================================================
-# ÜLKE BİLGİ
-# =========================================================
-
-@bot.command()
-async def ülkebilgi(ctx, *, ülke=None):
-
-    if not ülke:
-        return await ctx.send(
-            "❌ `.ülkebilgi Türkiye`"
-        )
-
-    country = get_country(
-        ctx.guild.id,
-        ülke
-    )
-
-    if not country:
-        return await ctx.send(
-            "❌ Ülke bulunamadı."
-        )
-
-    owner = "Sahipsiz"
-
-    if country["owner_id"]:
-
-        member = ctx.guild.get_member(
-            country["owner_id"]
-        )
-
-        if member:
-            owner = member.mention
-
-    e = discord.Embed(
-        title=f"🌍 {country['name']}",
-        colour=discord.Colour.blue()
-    )
-
-    e.add_field(
-        name="👑 Başkan",
-        value=owner
-    )
-
-    e.add_field(
-        name="💰 Hazine",
-        value=f"₺{country['treasury']:,}"
-    )
-
-    e.add_field(
-        name="👥 Nüfus",
-        value=f"{country['population']:,}"
-    )
-
-    e.add_field(
-        name="🎖️ Ordu",
-        value=f"{country['army']:,}"
-    )
-
-    e.add_field(
-        name="🛡️ Savunma",
-        value=f"{country['defense']:,}"
-    )
-
-    await ctx.send(embed=e)
-
-
-# =========================================================
-# HARİTA
-# =========================================================
-
-@bot.command()
-async def harita(ctx):
-
-    rows = db.execute(
-        """
-        SELECT *
-        FROM countries
-        WHERE guild_id=?
-        """,
-        (ctx.guild.id,)
-    ).fetchall()
-
-    if not rows:
-        return await ctx.send(
-            "❌ Önce `.kur`"
-        )
-
-    lines = []
-
-    for country in rows:
-
-        if country["owner_id"]:
-
-            owner = ctx.guild.get_member(
-                country["owner_id"]
-            )
-
-            if owner:
-                symbol = "🟥"
-                text = owner.display_name
-            else:
-                symbol = "🟨"
-                text = "Sahibi yok"
-
-        else:
-            symbol = "🟩"
-            text = "Sahipsiz"
-
-        lines.append(
-            f"{symbol} **{country['name']}** — {text}"
-        )
-
-    e = discord.Embed(
-        title="🗺️ ÜLKE RP HARİTASI",
-        description="\n".join(lines),
-        colour=discord.Colour.green()
-    )
-
-    e.set_footer(
-        text="🟩 Sahipsiz • 🟥 Sahipli"
-    )
-
-    await ctx.send(embed=e)
-
-
-# =========================================================
-# MARKET
-# =========================================================
-
-@bot.command()
-async def market(ctx):
-
-    lines = []
-
-    for key, data in MARKET.items():
-
-        name, price, _ = data
-
-        lines.append(
-            f"`{key}` — {name} — **₺{price:,}**"
-        )
-
-    e = discord.Embed(
-        title="🛒 RP MARKETİ",
-        description="\n".join(lines),
-        colour=discord.Colour.green()
-    )
-
-    e.set_footer(
-        text="Satın almak: .satınal ürün miktar"
-    )
-
-    await ctx.send(embed=e)
-
-
-# =========================================================
-# SATIN AL
-# =========================================================
-
-@bot.command()
-async def satınal(
-    ctx,
-    ürün=None,
-    miktar: int = 1
-):
-
-    if not ürün:
-        return await ctx.send(
-            "❌ `.satınal tank 2`"
-        )
-
-    ürün = ürün.lower()
-
-    if ürün not in MARKET:
-        return await ctx.send(
-            "❌ Market ürünlerinde böyle bir ürün yok."
-        )
-
-    if miktar <= 0 or miktar > 100:
-        return await ctx.send(
-            "❌ Miktar 1-100 arasında olmalı."
+            "❌ Kullanım: `.şirketkur Anadolu Teknoloji`"
         )
 
     user = get_user(
@@ -2062,182 +1288,46 @@ async def satınal(
 
     if not user:
         return await ctx.send(
-            "❌ Önce kayıt ol."
+            "❌ Vatandaş kaydın yok."
         )
 
-    name, price, _ = MARKET[ürün]
-
-    total = price * miktar
-
-    if user["balance"] < total:
+    if user["company"]:
         return await ctx.send(
-            f"❌ Yeterli paran yok.\n"
-            f"Gereken: **₺{total:,}**"
+            "❌ Zaten bir şirketin var."
         )
 
-    db.execute(
-        """
-        UPDATE users
-        SET balance=balance-?
-        WHERE guild_id=? AND user_id=?
-        """,
-        (
-            total,
-            ctx.guild.id,
-            ctx.author.id
+    if user["balance"] < 5000:
+        return await ctx.send(
+            "❌ Şirket kurmak için **₺5.000** gerekiyor."
         )
-    )
 
-    db.commit()
-
-    add_item(
-        ctx.guild.id,
-        ctx.author.id,
-        ürün,
-        miktar
-    )
-
-    await ctx.send(
-        f"🛒 **{name}** x{miktar} satın alındı.\n"
-        f"💰 Harcanan: **₺{total:,}**"
-    )
-
-
-# =========================================================
-# ENVANTER
-# =========================================================
-
-@bot.command()
-async def envanter(ctx):
-
-    rows = db.execute(
+    exists = db.execute(
         """
-        SELECT *
-        FROM inventory
-        WHERE guild_id=?
-        AND user_id=?
-        AND amount>0
-        ORDER BY item
+        SELECT 1
+        FROM companies
+        WHERE guild_id=? AND name=?
         """,
         (
             ctx.guild.id,
-            ctx.author.id
+            isim
         )
-    ).fetchall()
+    ).fetchone()
 
-    if not rows:
+    if exists:
         return await ctx.send(
-            "🎒 Envanterin boş."
-        )
-
-    lines = []
-
-    for row in rows:
-
-        if row["item"] in MARKET:
-            name = MARKET[row["item"]][0]
-        else:
-            name = row["item"]
-
-        lines.append(
-            f"{name} × **{row['amount']}**"
-        )
-
-    await ctx.send(
-        "🎒 **ENVANTERİN**\n\n"
-        + "\n".join(lines)
-    )
-
-
-# =========================================================
-# FABRİKALAR
-# =========================================================
-
-@bot.command()
-async def fabrikalar(ctx):
-
-    lines = []
-
-    for key, data in FACTORIES.items():
-
-        lines.append(
-            f"`{key}` — {data['name']}\n"
-            f"💰 Fiyat: ₺{data['price']:,}\n"
-            f"⏰ Saatlik: ₺{data['income']:,}"
-        )
-
-    await ctx.send(
-        "🏭 **FABRİKA TÜRLERİ**\n\n"
-        + "\n\n".join(lines)
-    )
-
-
-@bot.command()
-async def fabrika(
-    ctx,
-    işlem=None,
-    tür=None
-):
-
-    if işlem not in ["al", "liste"]:
-        return await ctx.send(
-            "❌ `.fabrika al demir`\n"
-            "veya `.fabrika liste`"
-        )
-
-    if işlem == "liste":
-        return await fabrikalar(ctx)
-
-    if not tür:
-        return await ctx.send(
-            "❌ Fabrika türü yaz."
-        )
-
-    tür = tür.lower()
-
-    if tür not in FACTORIES:
-        return await ctx.send(
-            "❌ Böyle bir fabrika yok.\n"
-            "`.fabrikalar`"
-        )
-
-    user = get_user(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    if not user:
-        return await ctx.send(
-            "❌ Önce kayıt ol."
-        )
-
-    country = get_owned_country(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    if not country:
-        return await ctx.send(
-            "❌ Fabrika satın almak için bir ülken olmalı."
-        )
-
-    data = FACTORIES[tür]
-
-    if user["balance"] < data["price"]:
-        return await ctx.send(
-            f"❌ Yeterli paran yok.\n"
-            f"Gereken: **₺{data['price']:,}**"
+            "❌ Bu isimde şirket zaten var."
         )
 
     db.execute(
         """
         UPDATE users
         SET balance=balance-?,
-            factory_count=factory_count+1
+            company=?
         WHERE guild_id=? AND user_id=?
         """,
         (
-            data["price"],
+            5000,
+            isim,
             ctx.guild.id,
             ctx.author.id
         )
@@ -2245,450 +1335,565 @@ async def fabrika(
 
     db.execute(
         """
-        INSERT INTO factories
+        INSERT INTO companies
         (
             guild_id,
             owner_id,
-            country,
-            name,
-            level,
-            price,
-            hourly_income,
-            last_paid
+            name
         )
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+        VALUES (?, ?, ?)
         """,
         (
             ctx.guild.id,
             ctx.author.id,
-            country["name"],
-            data["name"],
-            data["price"],
-            data["income"],
-            now()
+            isim
         )
     )
 
     db.commit()
 
     await ctx.send(
-        f"🏭 **{data['name']}** satın alındı!\n"
-        f"💰 Fiyat: **₺{data['price']:,}**\n"
-        f"⏰ Saatlik gelir: **₺{data['income']:,}**"
+        f"🏢 **{isim}** şirketi kuruldu!\n"
+        "💰 Kuruluş maliyeti: **₺5.000**"
     )
 
 
 # =========================================================
-# BENİM FABRİKALARIM
+# ŞİRKET
 # =========================================================
 
 @bot.command()
-async def fabrikalarım(ctx):
+async def şirket(ctx):
 
-    rows = db.execute(
+    user = get_user(
+        ctx.guild.id,
+        ctx.author.id
+    )
+
+    if not user or not user["company"]:
+        return await ctx.send(
+            "❌ Bir şirketin yok."
+        )
+
+    company = db.execute(
         """
         SELECT *
-        FROM factories
+        FROM companies
         WHERE guild_id=?
         AND owner_id=?
-        """,
-        (
-            ctx.guild.id,
-            ctx.author.id
-        )
-    ).fetchall()
-
-    if not rows:
-        return await ctx.send(
-            "🏭 Hiç fabrikan yok."
-        )
-
-    lines = []
-
-    for row in rows:
-
-        lines.append(
-            f"**{row['name']}**\n"
-            f"🌍 {row['country']}\n"
-            f"⭐ Seviye: {row['level']}\n"
-            f"⏰ Saatlik gelir: ₺{row['hourly_income']:,}"
-        )
-
-    await ctx.send(
-        "🏭 **FABRİKALARIN**\n\n"
-        + "\n\n".join(lines)
-    )
-
-
-# =========================================================
-# ORDU
-# =========================================================
-
-@bot.command()
-async def ordu(ctx):
-
-    country = get_owned_country(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    if not country:
-        return await ctx.send(
-            "❌ Bir ülken yok."
-        )
-
-    rows = db.execute(
-        """
-        SELECT item, amount
-        FROM inventory
-        WHERE guild_id=?
-        AND user_id=?
-        AND amount>0
-        """,
-        (
-            ctx.guild.id,
-            ctx.author.id
-        )
-    ).fetchall()
-
-    army_items = []
-
-    for row in rows:
-
-        if row["item"] in MARKET:
-
-            if MARKET[row["item"]][2] == "army":
-
-                army_items.append(
-                    f"{MARKET[row['item']][0]} × {row['amount']}"
-                )
-
-    text = (
-        "\n".join(army_items)
-        if army_items
-        else "Henüz birim yok."
-    )
-
-    await ctx.send(
-        f"🎖️ **{country['name']} ORDUSU**\n\n"
-        f"🎖️ Genel Ordu: **{country['army']}**\n"
-        f"🛡️ Savunma: **{country['defense']}**\n\n"
-        f"**Birimler:**\n{text}"
-    )
-
-
-# =========================================================
-# ASKER
-# =========================================================
-
-@bot.command()
-async def asker(ctx):
-
-    country = get_owned_country(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    if not country:
-        return await ctx.send(
-            "❌ Bir ülken yok."
-        )
-
-    rows = db.execute(
-        """
-        SELECT item, amount
-        FROM inventory
-        WHERE guild_id=?
-        AND user_id=?
-        AND amount>0
-        """,
-        (
-            ctx.guild.id,
-            ctx.author.id
-        )
-    ).fetchall()
-
-    army = 0
-    defense = 0
-
-    for row in rows:
-
-        if row["item"] not in MARKET:
-            continue
-
-        _, _, stat = MARKET[row["item"]]
-
-        if stat == "army":
-            army += row["amount"]
-        else:
-            defense += row["amount"]
-
-    db.execute(
-        """
-        UPDATE countries
-        SET army=?,
-            defense=?
-        WHERE guild_id=?
         AND name=?
         """,
         (
-            army,
-            defense,
             ctx.guild.id,
-            country["name"]
+            ctx.author.id,
+            user["company"]
+        )
+    ).fetchone()
+
+    if not company:
+        return await ctx.send(
+            "❌ Şirket verisi bulunamadı."
+        )
+
+    await ctx.send(
+        f"🏢 **{company['name']}**\n"
+        f"💰 Kasa: **₺{company['balance']:,}**\n"
+        f"👥 Çalışan: **{company['employees']}**"
+    )
+
+
+# =========================================================
+# İŞE AL
+# =========================================================
+
+@bot.command()
+async def işeal(
+    ctx,
+    member: discord.Member = None
+):
+
+    if not member:
+        return await ctx.send(
+            "❌ Kullanım: `.işeal @oyuncu`"
+        )
+
+    owner = get_user(
+        ctx.guild.id,
+        ctx.author.id
+    )
+
+    employee = get_user(
+        ctx.guild.id,
+        member.id
+    )
+
+    if not owner or not owner["company"]:
+        return await ctx.send(
+            "❌ Bir şirket sahibi olmalısın."
+        )
+
+    if not employee:
+        return await ctx.send(
+            "❌ Bu kişi kayıtlı değil."
+        )
+
+    db.execute(
+        """
+        UPDATE companies
+        SET employees=employees+1
+        WHERE guild_id=?
+        AND owner_id=?
+        AND name=?
+        """,
+        (
+            ctx.guild.id,
+            ctx.author.id,
+            owner["company"]
+        )
+    )
+
+    db.execute(
+        """
+        UPDATE users
+        SET company=?
+        WHERE guild_id=? AND user_id=?
+        """,
+        (
+            owner["company"],
+            ctx.guild.id,
+            member.id
         )
     )
 
     db.commit()
 
     await ctx.send(
-        f"🎖️ **{country['name']}**\n"
-        f"Ordu birimi: **{army}**\n"
-        f"Savunma birimi: **{defense}**"
+        f"🏢 {member.mention} "
+        f"**{owner['company']}** şirketine alındı."
     )
 
 
 # =========================================================
-# SAVAŞ
+# EV
 # =========================================================
 
 @bot.command()
-async def savaş(
-    ctx,
-    *,
-    ülke=None
-):
+async def ev(ctx, işlem=None):
 
-    attacker = get_owned_country(
+    user = get_user(
         ctx.guild.id,
         ctx.author.id
     )
 
-    if not attacker:
+    if not user:
         return await ctx.send(
-            "❌ Bir ülken yok."
+            "❌ Vatandaş kaydın yok."
         )
 
-    if not ülke:
+    if işlem != "al":
         return await ctx.send(
-            "❌ `.savaş Almanya`"
+            "❌ Kullanım: `.ev al`"
         )
 
-    defender = get_country(
-        ctx.guild.id,
-        ülke
+    if user["house"]:
+        return await ctx.send(
+            "❌ Zaten evin var."
+        )
+
+    if user["balance"] < 10000:
+        return await ctx.send(
+            "❌ Ev için **₺10.000** gerekiyor."
+        )
+
+    db.execute(
+        """
+        UPDATE users
+        SET balance=balance-?,
+            house=?
+        WHERE guild_id=? AND user_id=?
+        """,
+        (
+            10000,
+            "Standart Ev",
+            ctx.guild.id,
+            ctx.author.id
+        )
     )
 
-    if not defender:
+    db.commit()
+
+    await ctx.send(
+        "🏠 Standart ev satın aldın.\n"
+        "💰 Fiyat: **₺10.000**"
+    )
+
+
+# =========================================================
+# ŞEHİR
+# =========================================================
+
+@bot.command()
+async def şehir(ctx):
+
+    user = get_user(
+        ctx.guild.id,
+        ctx.author.id
+    )
+
+    if not user:
         return await ctx.send(
-            "❌ Böyle bir ülke yok."
+            "❌ Vatandaş kaydın yok."
         )
 
-    if attacker["name"] == defender["name"]:
+    await ctx.send(
+        f"🏙️ Şehrin: **{user['city']}**"
+    )
+
+
+# =========================================================
+# ÜLKE
+# =========================================================
+
+@bot.command()
+async def ülke(ctx):
+
+    country = db.execute(
+        """
+        SELECT *
+        FROM countries
+        WHERE guild_id=?
+        """,
+        (ctx.guild.id,)
+    ).fetchone()
+
+    if not country:
         return await ctx.send(
-            "❌ Kendi ülkene savaş açamazsın."
+            "❌ Henüz ülke oluşturulmamış."
         )
 
-    if not defender["owner_id"]:
+    await ctx.send(
+        f"🌍 **{country['name']}**\n"
+        f"🏛️ Başkent: **{country['capital']}**\n"
+        f"💰 Hazine: **₺{country['treasury']:,}**"
+    )
+
+
+# =========================================================
+# ÜLKE KUR
+# =========================================================
+
+@bot.command()
+async def ülkekur(ctx, *, isim=None):
+
+    if not is_management(ctx.author):
         return await ctx.send(
-            "❌ Sahipsiz ülkeye savaş açılamaz."
+            "❌ Bu komutu sadece yönetim kullanabilir."
+        )
+
+    if not isim:
+        return await ctx.send(
+            "❌ Kullanım: `.ülkekur Türkiye`"
+        )
+
+    country = db.execute(
+        """
+        SELECT *
+        FROM countries
+        WHERE guild_id=?
+        """,
+        (ctx.guild.id,)
+    ).fetchone()
+
+    if country:
+
+        db.execute(
+            """
+            UPDATE countries
+            SET name=?,
+                president_id=?
+            WHERE guild_id=?
+            """,
+            (
+                isim,
+                ctx.author.id,
+                ctx.guild.id
+            )
+        )
+
+    else:
+
+        db.execute(
+            """
+            INSERT INTO countries
+            (
+                guild_id,
+                name,
+                capital,
+                president_id,
+                treasury,
+                founded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ctx.guild.id,
+                isim,
+                "Başkent",
+                ctx.author.id,
+                100000,
+                now()
+            )
+        )
+
+    db.commit()
+
+    await ctx.send(
+        f"🌍 Ülkenin adı **{isim}** olarak ayarlandı."
+    )
+
+
+# =========================================================
+# SEÇİM
+# =========================================================
+
+@bot.command()
+async def adayol(ctx):
+
+    user = get_user(
+        ctx.guild.id,
+        ctx.author.id
+    )
+
+    if not user:
+        return await ctx.send(
+            "❌ Vatandaş kaydın yok."
         )
 
     existing = db.execute(
         """
-        SELECT *
-        FROM wars
+        SELECT 1
+        FROM elections
         WHERE guild_id=?
-        AND status='active'
-        AND (
-            (attacker=? AND defender=?)
-            OR
-            (attacker=? AND defender=?)
-        )
+        AND candidate_id=?
+        AND active=1
         """,
         (
             ctx.guild.id,
-            attacker["name"],
-            defender["name"],
-            defender["name"],
-            attacker["name"]
+            ctx.author.id
         )
     ).fetchone()
 
     if existing:
         return await ctx.send(
-            "⚔️ Bu iki ülke zaten savaşta."
+            "❌ Zaten adaysın."
         )
 
     db.execute(
         """
-        INSERT INTO wars
+        INSERT INTO elections
         (
             guild_id,
-            attacker,
-            defender,
-            status,
-            started_at
+            candidate_id
         )
-        VALUES (?, ?, ?, 'active', ?)
+        VALUES (?, ?)
         """,
         (
             ctx.guild.id,
-            attacker["name"],
-            defender["name"],
-            datetime.now(timezone.utc).isoformat()
+            ctx.author.id
         )
     )
 
     db.commit()
 
     await ctx.send(
-        f"⚔️ **SAVAŞ İLANI**\n\n"
-        f"🌍 Saldıran: **{attacker['name']}**\n"
-        f"🌍 Savunan: **{defender['name']}**\n\n"
-        f"🔴 Savaş başladı!"
+        "🗳️ Cumhurbaşkanlığı seçiminde aday oldun."
     )
 
 
-# =========================================================
-# SAVAŞLAR
-# =========================================================
-
 @bot.command()
-async def savaşlar(ctx):
+async def adaylar(ctx):
 
     rows = db.execute(
         """
         SELECT *
-        FROM wars
+        FROM elections
         WHERE guild_id=?
-        AND status='active'
+        AND active=1
+        ORDER BY votes DESC
         """,
         (ctx.guild.id,)
     ).fetchall()
 
     if not rows:
         return await ctx.send(
-            "🕊️ Aktif savaş yok."
+            "🗳️ Aktif aday yok."
         )
 
     lines = []
 
-    for row in rows:
+    for index, row in enumerate(rows, 1):
+
+        member = ctx.guild.get_member(
+            row["candidate_id"]
+        )
+
+        name = (
+            member.mention
+            if member
+            else str(row["candidate_id"])
+        )
 
         lines.append(
-            f"⚔️ **{row['attacker']}** "
-            f"vs "
-            f"**{row['defender']}**"
+            f"**{index}.** {name} — `{row['votes']}` oy"
         )
 
     await ctx.send(
-        "⚔️ **AKTİF SAVAŞLAR**\n\n"
+        "🗳️ **ADAYLAR**\n\n"
         + "\n".join(lines)
     )
 
 
-# =========================================================
-# BARIŞ
-# =========================================================
-
 @bot.command()
-async def barış(ctx, *, ülke=None):
+async def oyver(
+    ctx,
+    member: discord.Member = None
+):
 
-    my_country = get_owned_country(
+    if not member:
+        return await ctx.send(
+            "❌ Kullanım: `.oyver @aday`"
+        )
+
+    if not get_user(
         ctx.guild.id,
         ctx.author.id
-    )
-
-    if not my_country:
+    ):
         return await ctx.send(
-            "❌ Bir ülken yok."
+            "❌ Önce vatandaş kaydın yapılmalı."
         )
 
-    if not ülke:
-        return await ctx.send(
-            "❌ `.barış Almanya`"
-        )
-
-    war = db.execute(
+    candidate = db.execute(
         """
         SELECT *
-        FROM wars
+        FROM elections
         WHERE guild_id=?
-        AND status='active'
-        AND (
-            (attacker=? AND defender=?)
-            OR
-            (attacker=? AND defender=?)
-        )
+        AND candidate_id=?
+        AND active=1
         """,
         (
             ctx.guild.id,
-            my_country["name"],
-            ülke,
-            ülke,
-            my_country["name"]
+            member.id
         )
     ).fetchone()
 
-    if not war:
+    if not candidate:
         return await ctx.send(
-            "❌ Bu ülkeyle aktif savaş yok."
+            "❌ Bu kişi aktif aday değil."
+        )
+
+    used = db.execute(
+        """
+        SELECT 1
+        FROM votes
+        WHERE guild_id=?
+        AND voter_id=?
+        AND election_id=?
+        """,
+        (
+            ctx.guild.id,
+            ctx.author.id,
+            candidate["id"]
+        )
+    ).fetchone()
+
+    if used:
+        return await ctx.send(
+            "❌ Bu seçimde zaten oy kullandın."
         )
 
     db.execute(
         """
-        UPDATE wars
-        SET status='ended',
-            ended_at=?
+        UPDATE elections
+        SET votes=votes+1
         WHERE id=?
         """,
+        (candidate["id"],)
+    )
+
+    db.execute(
+        """
+        INSERT INTO votes
         (
-            datetime.now(timezone.utc).isoformat(),
-            war["id"]
+            guild_id,
+            voter_id,
+            election_id
+        )
+        VALUES (?, ?, ?)
+        """,
+        (
+            ctx.guild.id,
+            ctx.author.id,
+            candidate["id"]
         )
     )
 
     db.commit()
 
     await ctx.send(
-        f"🕊️ **{my_country['name']}** ile "
-        f"**{ülke}** arasındaki savaş sona erdi."
+        f"🗳️ Oyun **{member.display_name}** kişisine verildi."
     )
 
 
-# =========================================================
-# DİPLOMASİ
-# =========================================================
-
 @bot.command()
-async def diplomasi(ctx):
+async def seçim(ctx, işlem=None):
+
+    if işlem != "durum":
+        return await ctx.send(
+            "❌ Kullanım: `.seçim durum`"
+        )
 
     rows = db.execute(
         """
         SELECT *
-        FROM diplomacy
+        FROM elections
         WHERE guild_id=?
+        AND active=1
+        ORDER BY votes DESC
         """,
         (ctx.guild.id,)
     ).fetchall()
 
     if not rows:
         return await ctx.send(
-            "🤝 Henüz diplomatik anlaşma yok."
+            "🗳️ Aktif seçim yok."
         )
+
+    total = sum(
+        row["votes"]
+        for row in rows
+    )
 
     lines = []
 
     for row in rows:
 
+        member = ctx.guild.get_member(
+            row["candidate_id"]
+        )
+
+        name = (
+            member.mention
+            if member
+            else str(row["candidate_id"])
+        )
+
         lines.append(
-            f"🌍 {row['country1']} ↔ "
-            f"{row['country2']} — **{row['status']}**"
+            f"• {name}: `{row['votes']}` oy"
         )
 
     await ctx.send(
-        "🤝 **DİPLOMASİ**\n\n"
+        "🗳️ **SEÇİM DURUMU**\n\n"
+        f"Toplam oy: `{total}`\n\n"
         + "\n".join(lines)
     )
 
@@ -2707,12 +1912,12 @@ async def söyle(ctx, *, mesaj=None):
 
     if not mesaj:
         return await ctx.send(
-            "❌ `.söyle mesaj`"
+            "❌ Kullanım: `.söyle mesaj`"
         )
 
     try:
         await ctx.message.delete()
-    except:
+    except discord.HTTPException:
         pass
 
     await ctx.send(mesaj)
@@ -2732,7 +1937,7 @@ async def duyuru(ctx, *, mesaj=None):
 
     if not mesaj:
         return await ctx.send(
-            "❌ `.duyuru mesaj`"
+            "❌ Kullanım: `.duyuru mesaj`"
         )
 
     channel = discord.utils.get(
@@ -2742,20 +1947,22 @@ async def duyuru(ctx, *, mesaj=None):
 
     if not channel:
         return await ctx.send(
-            "❌ Duyuru kanalı yok."
+            "❌ Duyuru kanalı bulunamadı."
         )
 
-    e = discord.Embed(
+    embed = discord.Embed(
         title="📢 DUYURU",
         description=mesaj,
         colour=discord.Colour.blue()
     )
 
-    e.set_footer(
+    embed.set_footer(
         text=f"Yetkili: {ctx.author}"
     )
 
-    await channel.send(embed=e)
+    await channel.send(
+        embed=embed
+    )
 
     await ctx.send(
         "✅ Duyuru gönderildi."
@@ -2786,15 +1993,56 @@ async def temizle(ctx, miktar: int = 10):
         )
 
         await ctx.send(
-            f"🧹 **{len(deleted)}** mesaj silindi.",
+            f"🧹 `{max(0, len(deleted) - 1)}` mesaj temizlendi.",
             delete_after=3
         )
 
     except discord.Forbidden:
 
         await ctx.send(
-            "❌ Mesaj silme iznim yok."
+            "❌ Mesajları silme iznim yok."
         )
+
+
+# =========================================================
+# EMBED
+# =========================================================
+
+@bot.command()
+async def embed(ctx, *, veri=None):
+
+    if not is_staff(ctx.author):
+        return await ctx.send(
+            "❌ Yetkin yok."
+        )
+
+    if not veri or "|" not in veri:
+        return await ctx.send(
+            "❌ Kullanım:\n"
+            "`.embed Başlık | Mesaj`"
+        )
+
+    title, description = veri.split(
+        "|",
+        1
+    )
+
+    e = discord.Embed(
+        title=title.strip(),
+        description=description.strip(),
+        colour=discord.Colour.blue()
+    )
+
+    e.set_footer(
+        text=f"Gönderen: {ctx.author}"
+    )
+
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+
+    await ctx.send(embed=e)
 
 
 # =========================================================
@@ -2809,32 +2057,36 @@ async def bilgi(ctx):
             "❌ Yetkin yok."
         )
 
-    e = discord.Embed(
+    embed = discord.Embed(
         title=f"📊 {ctx.guild.name}",
         colour=discord.Colour.blue()
     )
 
-    e.add_field(
+    embed.add_field(
         name="👥 Üye",
-        value=str(ctx.guild.member_count)
+        value=str(ctx.guild.member_count),
+        inline=True
     )
 
-    e.add_field(
-        name="📁 Kanal",
-        value=str(len(ctx.guild.channels))
+    embed.add_field(
+        name="💬 Kanal",
+        value=str(len(ctx.guild.channels)),
+        inline=True
     )
 
-    e.add_field(
+    embed.add_field(
         name="🎭 Rol",
-        value=str(len(ctx.guild.roles))
+        value=str(len(ctx.guild.roles)),
+        inline=True
     )
 
-    e.add_field(
+    embed.add_field(
         name="📡 Ping",
-        value=f"{round(bot.latency * 1000)}ms"
+        value=f"{round(bot.latency * 1000)}ms",
+        inline=True
     )
 
-    await ctx.send(embed=e)
+    await ctx.send(embed=embed)
 
 
 # =========================================================
@@ -2854,35 +2106,37 @@ async def on_command_error(ctx, error):
         error,
         commands.CommandOnCooldown
     ):
-
-        await ctx.send(
-            f"⏳ Bu komutu tekrar kullanmak için "
-            f"**{error.retry_after:.0f} saniye** bekle."
+        return await ctx.send(
+            f"⏳ Biraz bekle: "
+            f"`{error.retry_after:.1f}` saniye."
         )
-        return
 
     if isinstance(
         error,
         commands.MissingRequiredArgument
     ):
-
-        await ctx.send(
+        return await ctx.send(
             "❌ Eksik bilgi girdin. `.yardım` yaz."
         )
-        return
 
     if isinstance(
         error,
         commands.BadArgument
     ):
-
-        await ctx.send(
+        return await ctx.send(
             "❌ Kullanıcı veya sayı hatalı."
         )
-        return
+
+    if isinstance(
+        error,
+        commands.MissingPermissions
+    ):
+        return await ctx.send(
+            "❌ Bu işlem için Discord yetkin yok."
+        )
 
     print(
-        f"[HATA] {ctx.command}: {repr(error)}"
+        f"[KOMUT HATASI] {ctx.command}: {error}"
     )
 
 
